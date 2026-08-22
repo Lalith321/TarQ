@@ -1,0 +1,17 @@
+fastapi==0.115.*
+uvicorn[standard]==0.30.*
+pydantic==2.*
+psycopg[binary]>=3.2,<4
+sqlalchemy==2.*
+python-multipart==0.0.*
+pypdf==4.*
+python-docx==1.*
+optuna==4.*
+scikit-learn==1.*
+joblib==1.*
+pandas==2.*
+numpy==2.*
+# Optional, only needed if you inject a real extract_fn / summarize_fn / llm_call_fn:
+# langchain-core
+# langgraph
+# tiktoken

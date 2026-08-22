@@ -1,0 +1,62 @@
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+*/.venv/
+*/venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Node.js
+node_modules/
+*/node_modules/
+
+# Frontend build output
+dist/
+build/
+.next/
+.vite/
+
+# Python build / packaging
+*.egg-info/
+.eggs/
+*.whl
+wheels/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / editors
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Database files
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Docker
+docker-compose.override.yml
+
+# Temporary files
+*.tmp
+*.temp
