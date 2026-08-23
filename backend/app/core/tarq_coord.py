@@ -68,7 +68,7 @@ import os
 
 # PostgreSQL Connection String
 DB_URI = os.getenv(
-    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/agent_db"
+    "DATABASE_URL", "postgresql://admin:Tarq321@localhost:5432/tarq_core"
 )
 
 # 1. Connection pool initialization
@@ -79,9 +79,9 @@ pool = AsyncConnectionPool(
     open=False,
 )
 
-
 async def get_checkpointer() -> AsyncPostgresSaver:
     """Initializes and returns the PostgreSQL checkpointer."""
+    await pool.open()
     checkpointer = AsyncPostgresSaver(pool)
     await checkpointer.setup()  # Auto-creates checkpoint tables if missing
     return checkpointer

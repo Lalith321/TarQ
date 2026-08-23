@@ -415,7 +415,9 @@ export function DashboardBuilder() {
 
   const { messages, sending, sendMessage, clearMessages } = useDashboardAgent(sessionId, {
     dashboardId,
-    onWidgetGenerated: (widget) => addWidget(widget),
+    onDashboardGenerated: (widgets) => {
+      setDashboard((prev) => (prev ? { ...prev, widgets: [...prev.widgets, ...widgets] } : prev));
+    },
   });
 
   /* ── Data Fetching ── */

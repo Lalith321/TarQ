@@ -74,7 +74,12 @@ export async function sendAgentMessage(
   sessionId: string,
   message: string,
   context?: { dashboardId?: string; existingWidgets?: WidgetSpec[] }
-): Promise<{ reply: string; widget?: WidgetSpec }> {
+): Promise<{
+  kind: 'text' | 'widget' | 'dashboard';
+  reply: string;
+  widget?: WidgetSpec;
+  widgets: WidgetSpec[];
+}> {
   const res = await fetch(`${API_BASE_URL}/agent/dashboard-chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

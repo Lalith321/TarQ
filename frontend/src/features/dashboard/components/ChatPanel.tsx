@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import type { AgentMessage } from '../hooks/useDashboardAgent';
+import WidgetRenderer from './widgets/WidgetRenderer';
 
 interface Props {
   messages: AgentMessage[];
@@ -12,6 +13,7 @@ interface Props {
 
 export function ChatPanel({ messages, sending, onSend, onClear, onAddWidgetFromChat }: Props) {
   const [input, setInput] = useState('');
+  const [exportedWidgetIds, setExportedWidgetIds] = useState<Set<string>>(() => new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
@@ -52,11 +54,19 @@ export function ChatPanel({ messages, sending, onSend, onClear, onAddWidgetFromC
 
                 {msg.widget && !msg.pending && (
                   <div className="mt-2 rounded-md border bg-card p-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium">{msg.widget.title}</span>
-                      {onAddWidgetFromChat && <button onClick={() => onAddWidgetFromChat(msg.widget!)} className="text-xs text-primary hover:underline">Add to board</button>}
-                    </div>
-                    <span className="mt-0.5 block text-[10px] uppercase tracking-wide text-muted-foreground">{msg.widget.type}</span>
+                    <WidgetRenderer widget={msg.widget} />
+                    {onAddWidgetFromChat && (
+                      <button
+                        disabled={exportedWidgetIds.has(msg.widget.id)}
+                        onClick={() => {
+                          onAddWidgetFromChat(msg.widget!);
+                          setExportedWidgetIds((prev) => new Set(prev).add(msg.widget!.id));
+                        }}
+                        className="mt-2 text-xs text-primary hover:underline disabled:text-muted-foreground disabled:no-underline"
+                      >
+                        {exportedWidgetIds.has(msg.widget.id) ? 'Exported' : 'Export to dashboard'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

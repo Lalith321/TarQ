@@ -7,6 +7,7 @@ and Dashboard artifacts back to the Master Coordinator.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, Any, List
 from langchain_anthropic import ChatAnthropic
@@ -17,8 +18,9 @@ from deepagents import create_deep_agent
 
 # 1. Imports from your modular codebase
 from .state import GraphState, active_task
+from .sandbox import SandboxBackendFactory
 from ..tools.dashboard_tool import dashboard_tool
-from ..tools.run_python_sandbox_tool import run_python_sandbox
+from ..tools.run_python_sandbox_tool import create_run_python_sandbox_tool
 from ..tools.sql_tool import create_sql_tools
 
 # 2. Agent System Prompt with Sandbox & Artifact Guidelines
@@ -28,7 +30,7 @@ You handle technical data extraction, pandas analysis, and visualization as dire
 Tools & Execution Rules:
 1. SQL Database Tools:
    - Execute `query_sql_database_tool` to run queries. Full outputs automatically export to CSV in the sandbox scratch directory, returning preview metadata to you.
-2. Sandbox Tools (`sandbox_execute_session`):
+2. Sandbox Tools (`run_python_sandbox`):
    - Perform stateful pandas manipulations, data cleaning, or statistical calculations directly on generated CSVs inside `/workspace` or `sandbox_data/`.
 3. Visualization Tools:
    - `create_widget`: Use for single charts/metrics.
@@ -83,7 +85,18 @@ _financials_db = _backend_dir / "data" / "financials.db"
 _financials_db.parent.mkdir(parents=True, exist_ok=True)
 sql_toolset = create_sql_tools(db_path=str(_financials_db), sandbox_dir=str(_backend_dir / "sandbox_data"))
 
-sandbox_toolset = [run_python_sandbox]
+# Use the same backend interface as the Narrator. Subprocess is a deliberate
+# local-development default; deployed environments select SANDBOX_BACKEND.
+_sandbox_backend_name = os.getenv("SANDBOX_BACKEND", "subprocess")
+_sandbox_backend_kwargs = (
+    {"workspace": str(_backend_dir / "sandbox_data")}
+    if _sandbox_backend_name == "subprocess"
+    else {}
+)
+_sandbox_backend = SandboxBackendFactory.create(
+    _sandbox_backend_name, **_sandbox_backend_kwargs
+).start()
+sandbox_toolset = [create_run_python_sandbox_tool(_sandbox_backend)]
 
 all_analyst_tools = [
     *sql_toolset,

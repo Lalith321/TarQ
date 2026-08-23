@@ -22,7 +22,7 @@ from app.models.schemas import (
     DashboardSpec, WidgetSpec, WidgetType, WidgetPosition,
     GisConfig, GisGeometry, DrillDownConfig,
 )
-from app.routers import dashboard, documents, context, ml
+from app.routers import agent, dashboard, documents, context, ml
 from app.services.dashboard_service import dashboard_service
 
 app = FastAPI(
@@ -41,6 +41,7 @@ app.add_middleware(
 )
 
 app.include_router(chat.router)
+app.include_router(agent.router)
 app.include_router(dashboard.router)
 app.include_router(documents.router)
 app.include_router(context.router)
