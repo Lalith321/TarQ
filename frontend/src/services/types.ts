@@ -103,21 +103,37 @@ export interface ModelListEntry {
   target: string;
 }
 
-// Mirrors GET /analyst/sessions/{id}/state
-export interface AnalystState {
-  rendered: string;
-  files: string[];
-  dataframes: Record<string, { shape: [number, number]; columns: string[] }>;
-  todos: { text: string; status: 'pending' | 'in_progress' | 'done' }[];
-  context_turns: number;
-  context_memory_blocks: number;
-  artifacts: string[];
+// Mirrors GET /analyst/sessions/{id}/state (LangGraph / chat.py)
+export interface AnalystMessage {
+  role: string;
+  content: string;
+  name: string | null;
 }
 
-export interface AnalystMessageResult {
-  answer: string;
-  trace: Record<string, any>[];
+export interface AnalystTodo {
+  id: string;
+  description: string;
+  assigned_to: 'Data Analyst' | 'Narrator';
+  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
 }
+
+export interface AnalystState {
+  session_id: string;
+  next_step: string[];
+  messages: AnalystMessage[];
+  artifacts: Record<string, string>;
+  widgets: Record<string, any>[];
+  todo: AnalystTodo[];
+}
+
+// Streaming event types received over WebSocket
+export type AnalystStreamEvent =
+  | { type: 'token'; node: string; content: string }
+  | { type: 'node_start'; node: string }
+  | { type: 'tool_start'; tool: string; input: any }
+  | { type: 'tool_end'; tool: string; output: string }
+  | { type: 'done' }
+  | { type: 'error'; error: string };
 
 
 

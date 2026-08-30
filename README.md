@@ -33,8 +33,9 @@ Two dashboards are seeded on boot, on purpose:
   among seven, not something every dashboard gets by default — see
   `_seed_demo_dashboard` vs `_seed_demo_gis_dashboard` in `main.py`.
 
-No `.env` is required to run — `DATABASE_URL` defaults to a local SQLite
-file, and no external API keys are used anywhere in this build.
+Dashboard storage requires a PostgreSQL `DATABASE_URL`. Dashboard tables are
+created in Postgres's `workspace` schema, keeping user-created dashboards
+and future saved ML artifacts separate from LangGraph checkpoint tables.
 
 To make extraction/summarization actually smart (rather than the heuristic
 fallbacks described in LIMITATIONS.md), inject callables where the routers
@@ -112,3 +113,11 @@ backend above.
 the same `DashboardSpec` JSON contract validated in `backend/app/models/schemas.py`
 — that round-trip (tool output → Pydantic validation) was tested during this
 build; see the smoke tests referenced in `LIMITATIONS.md`'s context.
+
+
+## Docker commands
+```bash
+docker run --name tarq-backend --network tarq-network -p 8000:8000 --env-file backend/.env -v "$(pwd)/backend:/app" -v /var/run/docker.sock:/var/run/docker.sock tarq-backend
+
+docker run --name tarq-frontend --network tarq-network -p 5173:5173 -v /app/node_modules -v "$(pwd)/frontend:/app" tarq-frontend
+```

@@ -6,17 +6,16 @@ import type { AnalystState } from '@/services/types';
 
 interface Props {
   sessionId: string | null;
-  /** Bump this to force a refetch after your chat UI sends a message —
-   * state doesn't push, it's pulled on demand. */
   refreshKey?: number;
 }
 
-/**
- * Drop this next to an existing chat UI, passing the same sessionId used
- * for sendAnalystMessage() calls. This is the one part of the analyst
- * that's genuinely new surface area — a chat UI has no reason to already
- * know how to render sandbox dataframes, a todo plan, or an artifact vault.
- */
+const STATUS_COLOR: Record<string, string> = {
+  pending: 'text-slate-400',
+  in_progress: 'text-amber-400',
+  completed: 'text-emerald-400',
+  blocked: 'text-red-400',
+};
+
 export default function AnalystStatePanel({ sessionId, refreshKey }: Props) {
   const [state, setState] = useState<AnalystState | null>(null);
 
@@ -25,55 +24,83 @@ export default function AnalystStatePanel({ sessionId, refreshKey }: Props) {
     fetchAnalystState(sessionId).then(setState).catch(() => setState(null));
   }, [sessionId, refreshKey]);
 
-  if (!sessionId) {
-    return <p className="text-xs text-muted-foreground">No active session.</p>;
-  }
-  if (!state) {
-    return <p className="text-xs text-muted-foreground">Loading state…</p>;
-  }
+  if (!sessionId) return <p className="text-xs text-slate-500">No active session.</p>;
+  if (!state) return <p className="text-xs text-slate-500">Loading state…</p>;
+
+  const aiMessages = state.messages.filter((m) => m.role === 'ai' && m.content);
+  const artifactKeys = Object.keys(state.artifacts ?? {});
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-        <span>{state.context_turns} live turns</span>
-        <span>{state.context_memory_blocks} compressed memory blocks</span>
-        <span>{state.artifacts.length} artifacts stored (kept out of conversation)</span>
-      </div>
-
-      {Object.keys(state.dataframes).length > 0 && (
-        <Card className="p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground mb-2">Dataframes</h4>
-          {Object.entries(state.dataframes).map(([name, d]) => (
-            <div key={name} className="text-xs mb-1">
-              <span className="font-semibold">{name}</span>: shape={JSON.stringify(d.shape)}, columns={d.columns.join(', ')}
-            </div>
-          ))}
+      {/* Todo plan */}
+      {state.todo.length > 0 && (
+        <Card className="p-4 border-white/[0.06] bg-white/[0.02]">
+          <h4 className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-3">Plan</h4>
+          <div className="space-y-2">
+            {state.todo.map((t) => (
+              <div key={t.id} className="flex items-start gap-2 text-xs">
+                <span className={`mt-0.5 font-semibold shrink-0 ${STATUS_COLOR[t.status] ?? 'text-slate-400'}`}>
+                  [{t.status}]
+                </span>
+                <span className="text-slate-300">{t.description}</span>
+                <Badge variant="outline" className="ml-auto text-[9px] shrink-0">{t.assigned_to}</Badge>
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 
-      {state.todos.length > 0 && (
-        <Card className="p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground mb-2">Plan</h4>
-          {state.todos.map((t, i) => (
-            <div key={i} className="text-xs flex items-center gap-2">
-              <Badge variant="outline" className="text-[9px]">{t.status}</Badge>
-              {t.text}
-            </div>
-          ))}
+      {/* Next step */}
+      {state.next_step?.length > 0 && (
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
+          </span>
+          Next: {state.next_step.join(', ')}
+        </div>
+      )}
+
+      {/* Widgets produced */}
+      {state.widgets.length > 0 && (
+        <Card className="p-4 border-white/[0.06] bg-white/[0.02]">
+          <h4 className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">
+            Widgets produced ({state.widgets.length})
+          </h4>
+          <div className="space-y-1">
+            {state.widgets.map((w, i) => (
+              <div key={w.id ?? i} className="flex items-center gap-2 text-xs text-slate-300">
+                <Badge variant="outline" className="text-[9px]">{w.type}</Badge>
+                {w.title}
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 
-      {state.files.length > 0 && (
-        <Card className="p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground mb-2">Files</h4>
-          <p className="text-xs">{state.files.join(', ')}</p>
+      {/* Artifacts */}
+      {artifactKeys.length > 0 && (
+        <Card className="p-4 border-white/[0.06] bg-white/[0.02]">
+          <h4 className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">Artifacts</h4>
+          <div className="space-y-1">
+            {artifactKeys.map((k) => (
+              <div key={k} className="text-xs text-slate-400">
+                <span className="font-semibold text-slate-300">{k}</span>: {state.artifacts[k]}
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 
-      <details className="text-xs">
-        <summary className="cursor-pointer text-muted-foreground">Raw state block (what's injected into the prompt)</summary>
-        <pre className="mt-2 p-3 bg-muted/20 rounded-lg whitespace-pre-wrap">{state.rendered}</pre>
-      </details>
+      {/* Last AI message */}
+      {aiMessages.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-slate-500">Last coordinator note</summary>
+          <pre className="mt-2 p-3 bg-slate-950/50 rounded-lg whitespace-pre-wrap text-slate-300 border border-white/[0.06]">
+            {aiMessages[aiMessages.length - 1].content}
+          </pre>
+        </details>
+      )}
     </div>
   );
 }

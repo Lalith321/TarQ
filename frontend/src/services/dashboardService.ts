@@ -69,38 +69,3 @@ export async function updateDashboard(
   if (!res.ok) throw new Error(`updateDashboard failed: ${res.status}`);
   return res.json();
 }
-
-export async function sendAgentMessage(
-  sessionId: string,
-  message: string,
-  context?: { dashboardId?: string; existingWidgets?: WidgetSpec[] }
-): Promise<{
-  kind: 'text' | 'widget' | 'dashboard';
-  reply: string;
-  widget?: WidgetSpec;
-  widgets: WidgetSpec[];
-}> {
-  const res = await fetch(`${API_BASE_URL}/agent/dashboard-chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, message, context }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `agent message failed: ${res.status}`);
-  }
-  return res.json();
-}
-
-export async function quickDashboard(prompt: string): Promise<DashboardSpec> {
-  const res = await fetch(`${API_BASE_URL}/agent/quick-dashboard`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `quickDashboard failed: ${res.status}`);
-  }
-  return res.json();
-}

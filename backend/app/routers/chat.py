@@ -1,27 +1,25 @@
 import json
-from contextlib import asynccontextmanager
-from pathlib import Path
-import tempfile
+import uuid
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from langchain_core.messages import HumanMessage, ToolMessage
-from pydantic import BaseModel
 
-from ..core.tarq_coord import DB_URI, build_compiled_graph, pool, AsyncPostgresSaver
-from ..agent.narrator import create_narrator_tools
-
-
-# FastAPI Lifespan to manage DB Connection Pool
-@asynccontextmanager
-async def router_lifespan():
-    await pool.open()
-    checkpointer = AsyncPostgresSaver(pool)
-    await checkpointer.setup()
-    yield
-    await pool.close()
-
+from ..core.tarq_coord import build_compiled_graph, get_checkpointer
 
 router = APIRouter(prefix="/analyst", tags=["analyst"])
+
+
+# ============================================================================
+# Session Creation
+# ============================================================================
+
+
+@router.post("/sessions")
+async def create_session():
+    """Create a new LangGraph session. Returns a thread_id used for all
+    subsequent WebSocket and state calls."""
+    session_id = uuid.uuid4().hex[:12]
+    return {"session_id": session_id}
 
 
 # ============================================================================
@@ -37,8 +35,7 @@ async def websocket_agent_stream(websocket: WebSocket, session_id: str):
     """
     await websocket.accept()
 
-    # Instantiate checkpointer bound to connection pool
-    checkpointer = AsyncPostgresSaver(pool)
+    checkpointer = await get_checkpointer()
     compiled_app = build_compiled_graph(checkpointer)
 
     # Config key maps session_id to LangGraph thread_id
@@ -116,8 +113,10 @@ async def websocket_agent_stream(websocket: WebSocket, session_id: str):
 
 @router.get("/sessions/{session_id}/state")
 async def get_session_state(session_id: str):
-    """Fetch current state directly from PostgreSQL checkpointer."""
-    checkpointer = AsyncPostgresSaver(pool)
+    """Fetch current state from PostgreSQL checkpointer.
+    Also extracts any dashboard/widget artifacts emitted by dashboard_tool
+    so the frontend can render them directly."""
+    checkpointer = await get_checkpointer()
     compiled_app = build_compiled_graph(checkpointer)
 
     config = {"configurable": {"thread_id": session_id}}
@@ -128,28 +127,39 @@ async def get_session_state(session_id: str):
             status_code=404, detail=f"No state found for session '{session_id}'"
         )
 
-    # Standardize output history
+    raw_messages = state_snapshot.values.get("messages", [])
+
     messages = [
         {
             "role": m.type,
-            "content": m.content,
+            "content": m.content if isinstance(m.content, str) else "",
             "name": getattr(m, "name", None),
         }
-        for m in state_snapshot.values.get("messages", [])
+        for m in raw_messages
     ]
+
+    # Extract dashboard_tool artifacts from ToolMessages so the UI can render widgets
+    widgets: list[dict] = []
+    for m in raw_messages:
+        if isinstance(m, ToolMessage) and m.name == "dashboard_tool":
+            artifact = getattr(m, "artifact", None)
+            if isinstance(artifact, dict):
+                widgets = artifact.get("widgets", [])
 
     return {
         "session_id": session_id,
         "next_step": state_snapshot.next,
         "messages": messages,
         "artifacts": state_snapshot.values.get("artifacts", {}),
+        "widgets": widgets,
+        "todo": state_snapshot.values.get("todo", []),
     }
 
 
 @router.delete("/sessions/{session_id}")
 async def delete_session_state(session_id: str):
     """Clears history checkpoints for a session."""
-    checkpointer = AsyncPostgresSaver(pool)
+    checkpointer = await get_checkpointer()
     config = {"configurable": {"thread_id": session_id}}
 
     # Wipe checkpoints in Postgres

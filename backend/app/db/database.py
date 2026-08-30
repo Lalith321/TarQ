@@ -1,24 +1,45 @@
 """
-Not wired into any router yet — the routers currently use the in-memory
-DashboardService. This exists so persistence is a one-line swap later:
-replace `DashboardService._dashboards` (a dict) with SQLAlchemy-backed reads
-and pass `SessionLocal` into it.
+Database engine, session factory, and schema initialization for the backend.
+DashboardService receives SessionLocal by default and uses it through its
+repository adapter; passing a different session factory makes it easy to test
+or configure another database.
 
-Uses SQLite by default (no server, no credentials) matching the existing
-stack's habit of starting there; DATABASE_URL env var swaps to Postgres
-without touching any calling code.
+This is the user-managed workspace database: dashboards live here today,
+and user-created artifacts such as saved ML models can live here later.
+When Postgres is used, all ORM tables in this module are placed in the
+``workspace`` schema, separate from LangGraph checkpoint tables.
+
+The application requires one PostgreSQL ``DATABASE_URL``. Dashboard storage
+uses its ``workspace`` schema; no alternate database or SQLite fallback is
+supported.
 """
 import os
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.schema import CreateSchema
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dashboard_platform.db")
+from app.models.db import Base
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL must be set to a PostgreSQL connection URL")
+if not DATABASE_URL.startswith("postgresql"):
+    raise RuntimeError("DATABASE_URL must use the postgresql:// URL scheme")
+
+_raw_engine = create_engine(DATABASE_URL)
+WORKSPACE_SCHEMA = "workspace"
+
+# schema_translate_map applies the workspace schema consistently to DDL and
+# ORM queries without baking a Postgres-only schema into the model classes.
+engine = _raw_engine.execution_options(schema_translate_map={None: WORKSPACE_SCHEMA})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+
+
+def init_db() -> None:
+    with _raw_engine.begin() as connection:
+        connection.execute(CreateSchema(WORKSPACE_SCHEMA, if_not_exists=True))
+    Base.metadata.create_all(bind=engine)
 
 
 def get_db():

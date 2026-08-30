@@ -1,14 +1,16 @@
+from langchain_google_genai import ChatGoogleGenerativeAI
 import pandas as pd
 from langgraph.graph import StateGraph, END, MessagesState
 from langgraph.prebuilt import ToolNode
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage
 from langgraph.types import Command
+from langchain.agents import create_agent
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg_pool import AsyncConnectionPool
 
 from ..agent.data_analyst import data_analyst_node
-from ..agent.narrator import narrator
+from ..agent.narrator import NARRATOR_PROMPT, narrator
 from ..agent.state import GraphState, TodoUpdate
 
 COORDINATOR_PROMPT = """You are the Master Coordinator for a data analysis and \
@@ -42,17 +44,26 @@ Your job every turn:
 """
 
 
-llm = ChatAnthropic(model="claude-sonnet-4-5")
-coordinator_llm = llm.with_structured_output(TodoUpdate)
+# llm = ChatAnthropic(model="claude-sonnet-4-5")
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+coordinator_llm = create_agent(
+    model=llm,
+    system_prompt=COORDINATOR_PROMPT,
+    response_format=TodoUpdate,
+)
 
 
 def master_coordinator(state: GraphState) -> Command:
     """Coordinator node: updates the shared todo list, judges what's actually
     done, and routes to whichever agent owns the next in-progress task."""
-    decision = coordinator_llm.invoke(
-        [("system", COORDINATOR_PROMPT), *state["messages"],
-         ("system", f"Current todo: {state.get('todo', [])}")]
+    result = coordinator_llm.invoke(
+        {"messages": [*state["messages"],
+         ("system", f"Current todo: {state.get('todo', [])}")
+        ]}
     )
+    last_msg = result["messages"][-1]
+    content = last_msg.content
+    decision = TodoUpdate(**content) if isinstance(content, dict) else TodoUpdate.model_validate_json(content)
 
     goto = END if decision.next == "end" else decision.next
     return Command(
@@ -64,12 +75,13 @@ def master_coordinator(state: GraphState) -> Command:
     )
 
 
+import asyncio
 import os
 
 # PostgreSQL Connection String
 DB_URI = os.getenv(
     "DATABASE_URL", "postgresql://admin:Tarq321@localhost:5432/tarq_core"
-)
+).replace("postgresql+psycopg://", "postgresql://", 1)
 
 # 1. Connection pool initialization
 pool = AsyncConnectionPool(
@@ -78,13 +90,28 @@ pool = AsyncConnectionPool(
     kwargs={"autocommit": True},
     open=False,
 )
+_pool_ready = False
+_pool_lock = asyncio.Lock()
 
 async def get_checkpointer() -> AsyncPostgresSaver:
     """Initializes and returns the PostgreSQL checkpointer."""
-    await pool.open()
-    checkpointer = AsyncPostgresSaver(pool)
-    await checkpointer.setup()  # Auto-creates checkpoint tables if missing
-    return checkpointer
+    global _pool_ready
+    async with _pool_lock:
+        if not _pool_ready:
+            await pool.open(wait=True)
+            checkpointer = AsyncPostgresSaver(pool)
+            await checkpointer.setup()
+            _pool_ready = True
+        return AsyncPostgresSaver(pool)
+
+
+async def close_checkpointer_pool() -> None:
+    """Closes the shared PostgreSQL pool during application shutdown."""
+    global _pool_ready
+    async with _pool_lock:
+        if _pool_ready:
+            await pool.close()
+            _pool_ready = False
 
 
 # 2. Build and Compile Graph
@@ -94,5 +121,6 @@ def build_compiled_graph(checkpointer: AsyncPostgresSaver):
     graph.add_node("Narrator", narrator)
     graph.add_node("Master Coordinator", master_coordinator)
     graph.set_entry_point("Master Coordinator")
+
 
     return graph.compile(checkpointer=checkpointer)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.models.schemas import DashboardSpec, WidgetSpec
+from app.models.schemas import DashboardSpec, DashboardUpdate, WidgetSpec
 from app.services.dashboard_service import dashboard_service
 
 router = APIRouter(prefix="/dashboards", tags=["dashboard"])
@@ -24,6 +24,21 @@ def get_dashboard(dashboard_id: str):
     if dash is None:
         raise HTTPException(404, f"dashboard '{dashboard_id}' not found")
     return dash
+
+
+@router.patch("/{dashboard_id}", response_model=DashboardSpec)
+def update_dashboard(dashboard_id: str, updates: DashboardUpdate):
+    if dashboard_service.get(dashboard_id) is None:
+        raise HTTPException(404, f"dashboard '{dashboard_id}' not found")
+    return dashboard_service.update(
+        dashboard_id, updates.model_dump(exclude_unset=True)
+    )
+
+
+@router.delete("/{dashboard_id}", status_code=204)
+def delete_dashboard(dashboard_id: str):
+    if not dashboard_service.delete(dashboard_id):
+        raise HTTPException(404, f"dashboard '{dashboard_id}' not found")
 
 
 @router.post("/{dashboard_id}/widgets/{widget_id}/drilldown", response_model=WidgetSpec)

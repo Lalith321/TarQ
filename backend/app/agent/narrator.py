@@ -1,4 +1,5 @@
 from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
@@ -11,7 +12,7 @@ import json
 import os
 import textwrap
 from typing import Annotated, Any, List, Union
-from tools.narrator_tool import create_narrator_tool
+from app.tools.narrator_tool import create_narrator_tools
 
 from .sandbox import ExecutionResult, SandboxBackend, SandboxBackendFactory
 
@@ -154,9 +155,10 @@ the task is complete or requires another pass.
 """
 
 narrator_tools = create_narrator_tools()
-llm = ChatAnthropic(model="claude-sonnet-4-5")
+# llm = ChatAnthropic(model="claude-sonnet-4-5")
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
-narrator_agent = create_deep_agent(
+narrator_agent = create_deep_agent(name="Narrator",
     model=llm,
     tools=narrator_tools,  # sandbox write/exec, remotion render, pptx build — attached later
     system_prompt=NARRATOR_PROMPT,

@@ -94,6 +94,14 @@ class DashboardSpec(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class DashboardUpdate(BaseModel):
+    """Fields the dashboard editor may change after creation."""
+
+    title: Optional[str] = None
+    description: Optional[str] = None
+    widgets: Optional[list[WidgetSpec]] = None
+
+
 # ── Document insight extraction ────────────────────────────────────────────
 
 class ExtractedMetric(BaseModel):

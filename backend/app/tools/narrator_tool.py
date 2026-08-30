@@ -1,7 +1,7 @@
 from typing import Annotated, Any, List, Union
 from langchain_core.tools import tool
 
-from .sandbox import ExecutionResult, SandboxBackend, SandboxBackendFactory
+from app.agent.sandbox import ExecutionResult, SandboxBackend, SandboxBackendFactory
 
 
 def _get_result_content(result: ExecutionResult) -> str:

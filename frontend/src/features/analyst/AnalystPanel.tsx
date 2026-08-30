@@ -1,8 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
-import { createAnalystSession, sendAnalystMessage, uploadAnalystDataset } from '@/services/analystService';
+import { createAnalystSession, streamAnalystMessage } from '@/services/analystService';
 import { fetchAgentConfigs, saveAgentConfigs, resetAgentConfigs } from '@/services/agentConfigService';
 import type { AgentType, AgentConfig } from '@/services/agentConfigService';
 import AnalystStatePanel from './AnalystStatePanel';
@@ -76,8 +75,6 @@ const DEFAULT_CONFIGS: Record<AgentType, AgentConfig> = {
 
 export default function AnalystPanel() {
   const { toast } = useToast();
-  const fileRef = useRef<HTMLInputElement>(null);
-
   const [selectedAgent, setSelectedAgent] = useState<AgentType>('coordinator');
   const [configs, setConfigs] = useState<Record<AgentType, AgentConfig>>(DEFAULT_CONFIGS);
   const [configsLoading, setConfigsLoading] = useState(true);
@@ -85,8 +82,6 @@ export default function AnalystPanel() {
   const [savedAt, setSavedAt] = useState<Date | null>(null);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [csvPath, setCsvPath] = useState<string | null>(null);
-  const [target, setTarget] = useState('');
   const [prompt, setPrompt] = useState('');
   const [isInjecting, setIsInjecting] = useState(false);
   const [output, setOutput] = useState<string | null>(null);
@@ -153,36 +148,30 @@ export default function AnalystPanel() {
     }
   };
 
-  const handleUpload = async () => {
-    const file = fileRef.current?.files?.[0];
-    if (!sessionId || !file) return;
-    try {
-      const path = await uploadAnalystDataset(sessionId, file);
-      setCsvPath(path);
-      toast({ title: 'Dataset uploaded', description: path });
-    } catch (err) {
-      toast({ title: 'Upload failed', description: String(err), variant: 'destructive' });
-    }
-  };
-
-  const handleInject = async () => {
+  const handleInject = useCallback(() => {
     if (!sessionId) {
       toast({ title: 'No session', description: 'Start a session first.', variant: 'destructive' });
       return;
     }
     if (!prompt.trim()) return;
     setIsInjecting(true);
-    try {
-      const hints = csvPath ? { csv_path: csvPath, df_name: 'df', target: target.trim() || undefined } : undefined;
-      const res = await sendAnalystMessage(sessionId, prompt.trim(), hints);
-      setOutput(res.answer);
-      setRefreshKey((k) => k + 1);
-    } catch (err) {
-      toast({ title: 'Injection failed', description: String(err), variant: 'destructive' });
-    } finally {
-      setIsInjecting(false);
-    }
-  };
+    setOutput('');
+
+    const cleanup = streamAnalystMessage(sessionId, prompt.trim(), (event) => {
+      if (event.type === 'token') {
+        setOutput((prev) => (prev ?? '') + event.content);
+      } else if (event.type === 'done') {
+        setIsInjecting(false);
+        setRefreshKey((k) => k + 1);
+      } else if (event.type === 'error') {
+        toast({ title: 'Stream error', description: event.error, variant: 'destructive' });
+        setIsInjecting(false);
+      }
+    });
+
+    // Cleanup on unmount mid-stream
+    return cleanup;
+  }, [sessionId, prompt, toast]);
 
   const current = configs[selectedAgent];
   const agentMeta = AGENTS.find((a) => a.id === selectedAgent)!;
@@ -379,38 +368,6 @@ export default function AnalystPanel() {
             </div>
 
             <div className="space-y-4 p-5">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-300">Target Column</label>
-                  <Input
-                    value={target}
-                    onChange={(e) => setTarget(e.target.value)}
-                    placeholder="e.g. revenue"
-                    className="h-9 border-white/10 bg-slate-900/50 text-xs text-white placeholder:text-slate-600 focus-visible:ring-primary/30"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-300">Dataset</label>
-                  <div className="flex gap-2">
-                    <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleUpload} />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => fileRef.current?.click()}
-                      className="h-9 gap-2 border-white/10 bg-transparent text-xs text-slate-300 hover:bg-white/5 hover:text-white"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                        <polyline points="17 8 12 3 7 8" />
-                        <line x1="12" y1="3" x2="12" y2="15" />
-                      </svg>
-                      {csvPath ? 'Change' : 'Upload CSV'}
-                    </Button>
-                    {csvPath && <span className="flex items-center text-[11px] text-emerald-400">{csvPath}</span>}
-                  </div>
-                </div>
-              </div>
-
               <div className="relative">
                 <div className="absolute left-4 top-4 text-primary/60 font-mono text-sm">{'>'}</div>
                 <textarea

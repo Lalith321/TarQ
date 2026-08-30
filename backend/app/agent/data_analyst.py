@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, List
 from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAI
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command
 
@@ -104,9 +105,9 @@ all_analyst_tools = [
     dashboard_tool,
 ]
 
-llm = ChatAnthropic(model="claude-3-7-sonnet-20250219")
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
-data_analyst_agent = create_deep_agent(
+data_analyst_agent = create_deep_agent(name="Data Analyst",
     model=llm,
     tools=all_analyst_tools,
     system_prompt=DATA_ANALYST_PROMPT,
@@ -133,6 +134,7 @@ def data_analyst_node(state: GraphState) -> Command:
     # Construct context task message
     task_prompt = (
         f"Active Task: {task_desc}\n"
+        f"User Instructions: {state.get('messages', [])[-1]}\n"
         f"Available Host/Sandbox Artifacts: {json.dumps(existing_artifacts, indent=2)}"
     )
 

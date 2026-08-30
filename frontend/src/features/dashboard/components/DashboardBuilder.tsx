@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,34 +7,6 @@ import { useDashboardAgent } from '../hooks/useDashboardAgent';
 import WidgetRenderer from './widgets/WidgetRenderer';
 import type { WidgetSpec, DashboardSpec } from '@/services/types';
 import { fetchDashboard, updateDashboard, fetchDrillDown } from '@/services/dashboardService';
-
-/* ═══════════════════════════════════════════════════════════════
-   DUMMY API LAYER — Replace with real backend calls
-   ═══════════════════════════════════════════════════════════════ */
-
-export interface VideoItem {
-  id: string;
-  title: string;
-  url: string;
-  duration: number;
-  uploadedAt: string;
-}
-
-export interface PresentationItem {
-  id: string;
-  title: string;
-  slideCount: number;
-  url: string;
-  uploadedAt: string;
-}
-
-export interface UploadItem {
-  id: string;
-  name: string;
-  url: string;
-  type: 'image' | 'icon';
-  uploadedAt: string;
-}
 
 export interface WidgetConfig {
   title: string;
@@ -47,46 +19,6 @@ export interface WidgetConfig {
   fillOpacity?: number;
 }
 
-// TODO: Replace with real API call
-export const fetchDashboardMedia = async (_dashboardId: string): Promise<{ videos: VideoItem[]; presentations: PresentationItem[] }> => {
-  return { videos: [], presentations: [] };
-};
-
-// TODO: Replace with real API call
-export const fetchDashboardUploads = async (_dashboardId: string): Promise<UploadItem[]> => {
-  return [];
-};
-
-// TODO: Replace with real API call
-export const uploadFile = async (_dashboardId: string, file: File): Promise<UploadItem> => {
-  return {
-    id: `u_${Date.now()}`,
-    name: file.name,
-    url: URL.createObjectURL(file),
-    type: file.type.startsWith('image/') ? 'image' : 'icon',
-    uploadedAt: new Date().toISOString(),
-  };
-};
-
-// TODO: Replace with real API call
-export const createWidget = async (
-  _dashboardId: string,
-  widgetType: string,
-  config: WidgetConfig
-): Promise<WidgetSpec> => {
-  return {
-    id: `widget_${Date.now()}`,
-    type: widgetType,
-    title: config.title,
-    config,
-    data: [],
-    position: { x: 0, y: 0, w: 6, h: 4 },
-    drill_down: { enabled: false, key_fields: [], result_widget_type: 'table', title_template: '{{value}}' },
-  } as unknown as WidgetSpec;
-};
-
-// TODO: Replace with real API call
-export const refreshDashboardData = async (_dashboardId: string): Promise<void> => {};
 
 /* ═══════════════════════════════════════════════════════════════
    ICONS
@@ -366,26 +298,6 @@ function ConfigDrawer({
    MEDIA MODAL
    ═══════════════════════════════════════════════════════════════ */
 
-function MediaModal({ item, type, onClose }: { item: VideoItem | PresentationItem; type: 'video' | 'presentation'; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
-      <div className="relative w-full max-w-4xl rounded-2xl border border-white/10 bg-slate-900 shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-white/5 px-6 py-4">
-          <h3 className="text-lg font-semibold text-white">{item.title}</h3>
-          <button onClick={onClose} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white/5 hover:text-white">
-            {Icons.close}
-          </button>
-        </div>
-        <div className="aspect-video bg-black flex items-center justify-center">
-          <p className="text-sm text-slate-400">
-            {type === 'video' ? 'Video player' : 'Presentation viewer'} — URL: {item.url}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ═══════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ═══════════════════════════════════════════════════════════════ */
@@ -406,11 +318,6 @@ export function DashboardBuilder() {
   const [agentOpen, setAgentOpen] = useState(false);
   const [editingWidget, setEditingWidget] = useState<WidgetSpec | null>(null);
 
-  const [media, setMedia] = useState<{ videos: VideoItem[]; presentations: PresentationItem[] } | null>(null);
-  const [uploads, setUploads] = useState<UploadItem[]>([]);
-  const [activeMedia, setActiveMedia] = useState<{ item: VideoItem | PresentationItem; type: 'video' | 'presentation' } | null>(null);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const sessionId = useMemo(() => `sess_${Date.now()}`, []);
 
   const { messages, sending, sendMessage, clearMessages } = useDashboardAgent(sessionId, {
@@ -426,16 +333,8 @@ export function DashboardBuilder() {
       setLoading(false);
       return;
     }
-    Promise.all([
-      fetchDashboard(dashboardId),
-      fetchDashboardMedia(dashboardId),
-      fetchDashboardUploads(dashboardId),
-    ])
-      .then(([d, m, u]) => {
-        setDashboard(d);
-        setMedia(m);
-        setUploads(u);
-      })
+    fetchDashboard(dashboardId)
+      .then(setDashboard)
       .catch(() => setDashboard(null))
       .finally(() => setLoading(false));
   }, [dashboardId]);
@@ -478,7 +377,6 @@ export function DashboardBuilder() {
     if (!dashboardId) return;
     setRefreshing(true);
     try {
-      await refreshDashboardData(dashboardId);
       const d = await fetchDashboard(dashboardId);
       setDashboard(d);
       setToast({ message: 'Dashboard refreshed', type: 'success' });
@@ -507,19 +405,6 @@ export function DashboardBuilder() {
     });
     setEditingWidget(null);
     setToast({ message: 'Widget updated', type: 'success' });
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !dashboardId) return;
-    try {
-      const uploaded = await uploadFile(dashboardId, file);
-      setUploads((prev) => [uploaded, ...prev]);
-      setToast({ message: `${file.name} uploaded`, type: 'success' });
-    } catch (e: any) {
-      setToast({ message: e.message || 'Upload failed', type: 'error' });
-    }
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   /* ── Loading ── */
@@ -644,82 +529,10 @@ export function DashboardBuilder() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
-            {/* Uploads Section */}
-            <SidebarSection title="Uploads" icon={Icons.upload} defaultOpen={true}>
-              <div className="space-y-3">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 bg-slate-800/20 py-6 text-xs font-medium text-slate-400 transition-all hover:border-primary/30 hover:bg-primary/5 hover:text-primary"
-                >
-                  {Icons.upload}
-                  Click or drop files
-                </button>
-                <input ref={fileInputRef} type="file" accept="image/*,.svg,.png,.jpg,.jpeg" className="hidden" onChange={handleFileUpload} />
-
-                {uploads.length > 0 && (
-                  <div className="grid grid-cols-3 gap-2">
-                    {uploads.map((u) => (
-                      <div key={u.id} className="group relative aspect-square overflow-hidden rounded-lg border border-white/5 bg-slate-800/30">
-                        <img src={u.url} alt={u.name} className="h-full w-full object-cover" />
-                        <div className="absolute inset-0 flex items-end bg-gradient-to-t from-black/60 to-transparent p-1.5 opacity-0 transition-opacity group-hover:opacity-100">
-                          <span className="truncate text-[9px] text-white">{u.name}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </SidebarSection>
-
-            {/* Media Section */}
-            <SidebarSection title="Media" icon={Icons.video} defaultOpen={false}>
-              <div className="space-y-3">
-                {media && media.videos.length > 0 && (
-                  <div>
-                    <p className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Videos</p>
-                    <div className="space-y-2">
-                      {media.videos.map((v) => (
-                        <button
-                          key={v.id}
-                          onClick={() => setActiveMedia({ item: v, type: 'video' })}
-                          className="flex w-full items-center gap-3 rounded-lg border border-white/5 bg-slate-800/20 p-2.5 text-left transition-all hover:border-white/10 hover:bg-slate-800/40"
-                        >
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-slate-400">
-                            {Icons.video}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate text-xs font-medium text-slate-200">{v.title}</p>
-                            <p className="text-[10px] text-slate-500">{Math.floor(v.duration / 60)}:{String(v.duration % 60).padStart(2, '0')}</p>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {media && media.presentations.length > 0 && (
-                  <div>
-                    <p className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Presentations</p>
-                    <div className="space-y-2">
-                      {media.presentations.map((p) => (
-                        <button
-                          key={p.id}
-                          onClick={() => setActiveMedia({ item: p, type: 'presentation' })}
-                          className="flex w-full items-center gap-3 rounded-lg border border-white/5 bg-slate-800/20 p-2.5 text-left transition-all hover:border-white/10 hover:bg-slate-800/40"
-                        >
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-slate-400">
-                            {Icons.presentation}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate text-xs font-medium text-slate-200">{p.title}</p>
-                            <p className="text-[10px] text-slate-500">{p.slideCount} slides</p>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+            <SidebarSection title="Dashboard" icon={Icons.agent}>
+              <p className="px-1 text-xs leading-5 text-slate-400">
+                Use the assistant to add widgets, select a widget to edit it, and save when ready.
+              </p>
             </SidebarSection>
           </div>
         </aside>
@@ -824,9 +637,6 @@ export function DashboardBuilder() {
           </button>
         )}
       </div>
-
-      {/* ── MEDIA MODAL ── */}
-      {activeMedia && <MediaModal item={activeMedia.item} type={activeMedia.type} onClose={() => setActiveMedia(null)} />}
 
       {/* ── TOAST ── */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}

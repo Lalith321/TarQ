@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import sys
 from pathlib import Path
 
@@ -18,17 +19,29 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for repo-root imports
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.db.database import init_db
+from app.core.tarq_coord import close_checkpointer_pool, get_checkpointer
 from app.models.schemas import (
     DashboardSpec, WidgetSpec, WidgetType, WidgetPosition,
     GisConfig, GisGeometry, DrillDownConfig,
 )
-from app.routers import agent, dashboard, documents, context, ml
+from app.routers import dashboard, documents, context, ml
 from app.services.dashboard_service import dashboard_service
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await get_checkpointer()
+    try:
+        yield
+    finally:
+        await close_checkpointer_pool()
+
 
 app = FastAPI(
     title="Data Analysis API",
     description="Data analysis and insight generation service.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Wide open CORS since there's no auth layer yet; tighten this the same day
@@ -41,7 +54,6 @@ app.add_middleware(
 )
 
 app.include_router(chat.router)
-app.include_router(agent.router)
 app.include_router(dashboard.router)
 app.include_router(documents.router)
 app.include_router(context.router)
@@ -113,4 +125,5 @@ def _seed_demo_dashboard() -> None:
     )
 
 
+init_db()
 _seed_demo_dashboard()
