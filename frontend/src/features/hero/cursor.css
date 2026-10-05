@@ -1,0 +1,80 @@
+/* src/features/hero/Cursor.css */
+.tarq-cursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 9999;
+  mix-blend-mode: screen;
+}
+
+.tarq-cursor-dot {
+  position: absolute;
+  top: 0; left: 0;
+  width: 6px; height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: #00d4ff;
+}
+
+.tarq-cursor-ring {
+  position: absolute;
+  top: 0; left: 0;
+  width: 40px; height: 40px;
+  margin: -20px 0 0 -20px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 212, 255, 0.5);
+  border-top-color: transparent;
+  border-right-color: transparent;
+  transition: width 0.25s ease, height 0.25s ease, margin 0.25s ease;
+}
+
+.tarq-cursor-arc {
+  position: absolute;
+  top: 0; left: 0;
+  width: 64px; height: 64px;
+  margin: -32px 0 0 -32px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  border-top-color: rgba(0, 212, 255, 0.9);
+}
+
+.tarq-cursor-glow {
+  position: absolute;
+  top: 0; left: 0;
+  width: 120px; height: 120px;
+  margin: -60px 0 0 -60px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 212, 255, 0.15), transparent 70%);
+}
+
+.tarq-cursor.hover .tarq-cursor-ring {
+  width: 56px; height: 56px;
+  margin: -28px 0 0 -28px;
+  border-color: rgba(0, 212, 255, 0.8);
+}
+.tarq-cursor.hover .tarq-cursor-dot { background: #fff; }
+
+body.tarq-hide-native-cursor {
+  cursor: none;
+}
+
+.tarq-cursor-glow,
+.tarq-cursor-arc,
+.tarq-cursor-ring {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.tarq-cursor.over-globe .tarq-cursor-glow,
+.tarq-cursor.over-globe .tarq-cursor-arc,
+.tarq-cursor.over-globe .tarq-cursor-ring {
+  opacity: 1;
+}
+
+.tarq-cursor-dot {
+  transition: opacity 0.2s ease;
+}
+.tarq-cursor.over-globe .tarq-cursor-dot {
+  opacity: 0;
+}

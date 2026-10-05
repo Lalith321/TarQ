@@ -3,39 +3,31 @@ import { Link } from 'react-router-dom';
 import * as THREE from 'three';
 import { Globe } from '../features/hero/globe';
 import { GlobeHoverCards } from '../features/hero/GlobeHoverCards';
+import { GlobeCursorDecal } from '../features/hero/GlobeCursorDecal';
 import './LandingPage.css';
 
 export function LandingPage() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const canvasRef   = useRef<HTMLCanvasElement>(null);
+  const cameraRef   = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const globeRef = useRef<Globe | null>(null);
+  const globeRef    = useRef<Globe | null>(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     if (!canvasRef.current) return;
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x02040a, 0.004);
+    scene.fog = new THREE.FogExp2(0x07080f, 0.004);
 
-    const camera = new THREE.PerspectiveCamera(
-      35,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      1000,
-    );
+    const camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 4, 32);
     camera.lookAt(0, -4, 0);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({
-      canvas: canvasRef.current,
-      antialias: true,
-      alpha: false,
-    });
+    const renderer = new THREE.WebGLRenderer({ canvas: canvasRef.current, antialias: true, alpha: false });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setClearColor(0x02040a, 1);
+    renderer.setClearColor(0x07080f, 1);
     rendererRef.current = renderer;
 
     const globe = new Globe(scene);
@@ -51,10 +43,13 @@ export function LandingPage() {
     scene.add(fill);
 
     const clock = new THREE.Clock();
+    const cursorDecal = new GlobeCursorDecal(scene, camera, renderer, globe);
+
     function animate() {
       requestAnimationFrame(animate);
       const time = clock.getElapsedTime();
-      const dt = clock.getDelta();
+      const dt   = clock.getDelta();
+      cursorDecal.update(time);
       globe.update(time, dt);
       renderer.render(scene, camera);
     }
@@ -69,6 +64,7 @@ export function LandingPage() {
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      cursorDecal.dispose();
       renderer.dispose();
     };
   }, []);
@@ -89,20 +85,55 @@ export function LandingPage() {
       <div className="landing-vignette-radial" />
       <div className="landing-vignette-top" />
 
+      {/* Nav */}
       <nav className="landing-nav">
-        <div className="nav-brand">Tarq</div>
+        <div className="nav-brand">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" className="nav-brand-icon">
+            <polygon points="12,2 21,7 21,17 12,22 3,17 3,7" stroke="url(#lg)" strokeWidth="1.5" fill="rgba(59,130,246,0.1)"/>
+            <circle cx="12" cy="12" r="3" fill="url(#lg)"/>
+            <defs>
+              <linearGradient id="lg" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#3b82f6"/>
+                <stop offset="100%" stopColor="#06b6d4"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          TarQ
+        </div>
         <div className="nav-links">
-          <a href="#">Analysis</a>
-          <a href="#">Insights</a>
-          <a href="#">ML</a>
-          <a href="#">Docs</a>
+          <a href="#analysis">Analysis</a>
+          <a href="#insights">Insights</a>
+          <a href="#ml">ML</a>
+          <a href="#docs">Docs</a>
+          <Link to="/signin" className="nav-cta">Sign in</Link>
         </div>
       </nav>
 
+      {/* Hero */}
       <div className="landing-hero">
-        <h1>Analyze the signal in your data.</h1>
-        <p>Explore datasets, ask questions, and turn raw information into clear business insight.</p>
-        <Link to="/app/analyst" className="hero-btn">OPEN ANALYSIS</Link>
+        <div className="hero-eyebrow">
+          <span className="hero-eyebrow-dot" />
+          AI-Powered Data Intelligence
+        </div>
+
+        <h1>
+          Turn raw data into<br />
+          <strong>clear business insight.</strong>
+        </h1>
+
+        <p>
+          Explore datasets, ask questions in plain language, and let your
+          agent fleet surface the signals that matter.
+        </p>
+
+        <div className="hero-actions">
+          <Link to="/app/analyst" className="hero-btn-primary">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+            Open Analysis
+          </Link>
+        </div>
       </div>
     </div>
   );

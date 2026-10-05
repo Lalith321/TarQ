@@ -1,41 +1,36 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { Check, Database, FileSpreadsheet, FileText, LoaderCircle, MoreVertical, Plus, Radio, Search, Upload, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import {
-  fetchDataSources,
-  testSQLConnection,
-  importSQLSchema,
-  uploadExcelFile,
-  importExcelDataset,
-  testWebSocket,
-  saveWebSocketConnection,
-  uploadDocuments,
   deleteDataSource,
+  fetchDataSources,
+  importExcelDataset,
+  importSQLSchema,
+  normalizeDataSource,
+  saveWebSocketConnection,
+  testSQLConnection,
+  testWebSocket,
+  uploadDocument,
+  uploadExcelFile,
 } from '@/services/dataSourceService';
 import type { DataSource } from '@/services/dataSourceService';
 
-/* ═══════════════════════════════════════════════════════════════
-   ICONS
-   ═══════════════════════════════════════════════════════════════ */
-
 const Icons = {
-  database: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" /><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" /></svg>,
-  excel: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="8" y1="13" x2="16" y2="13" /><line x1="8" y1="17" x2="16" y2="17" /></svg>,
-  live: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></svg>,
-  document: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>,
-  plus: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>,
-  search: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>,
-  more: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="19" r="1" /></svg>,
-  close: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>,
-  check: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>,
-  upload: <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>,
-  spinner: <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>,
+  database: <Database size={20} strokeWidth={1.6} />,
+  excel: <FileSpreadsheet size={20} strokeWidth={1.6} />,
+  live: <Radio size={20} strokeWidth={1.6} />,
+  document: <FileText size={20} strokeWidth={1.6} />,
+  plus: <Plus size={16} strokeWidth={2} />,
+  search: <Search size={16} strokeWidth={2} />,
+  more: <MoreVertical size={16} strokeWidth={2} />,
+  close: <X size={16} strokeWidth={2} />,
+  check: <Check size={14} strokeWidth={2.5} />,
+  upload: <Upload size={28} strokeWidth={1.6} />,
+  spinner: <LoaderCircle size={16} className="animate-spin" />,
 };
-
-/* ═══════════════════════════════════════════════════════════════
-   STATUS BADGE
-   ═══════════════════════════════════════════════════════════════ */
 
 function StatusBadge({ status }: { status: DataSource['status'] }) {
   const config = {
@@ -46,7 +41,6 @@ function StatusBadge({ status }: { status: DataSource['status'] }) {
     processing: { color: 'text-amber-400', bg: 'bg-amber-500/10', ring: 'ring-amber-500/20', label: 'Processing' },
     failed: { color: 'text-red-400', bg: 'bg-red-500/10', ring: 'ring-red-500/20', label: 'Failed' },
   }[status];
-
   const isLive = status === 'connected' || status === 'streaming' || status === 'processing';
 
   return (
@@ -64,35 +58,71 @@ function StatusBadge({ status }: { status: DataSource['status'] }) {
    SOURCE MENU
    ═══════════════════════════════════════════════════════════════ */
 
-function SourceMenu({ type, onAction }: { type: DataSource['type']; onAction: (action: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+function SourceMenu({ onAction }: { onAction: (action: string) => void }) {
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  const items = ['Delete'];
+
+  const handleClick = () => {
+    if (pos) { setPos(null); return; }
+    const rect = btnRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const menuHeight = items.length * 36;
+    setPos({
+      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 8)),
+      right: Math.max(8, window.innerWidth - rect.right),
+    });
+  };
 
   useEffect(() => {
-    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  const items = type === 'structured'
-    ? ['View schema', 'Preview data', 'Refresh schema', 'Edit connection', 'Remove']
-    : type === 'live'
-    ? ['View schema', 'Connection settings', 'Pause', 'Remove']
-    : ['View details', 'Re-index', 'Download', 'Remove'];
+    if (!pos) return;
+    const close = () => setPos(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [pos]);
 
   return (
-    <div className="relative" ref={ref}>
-      <button onClick={() => setOpen(!open)} className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-white/5 hover:text-slate-300">{Icons.more}</button>
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-1 w-44 overflow-hidden rounded-xl border border-white/10 bg-slate-900 shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100">
-          {items.map((item) => (
-            <button key={item} onClick={() => { onAction(item); setOpen(false); }} className={`block w-full px-3 py-2 text-left text-xs transition-colors hover:bg-white/5 ${item === 'Remove' ? 'text-red-400 hover:text-red-300' : 'text-slate-300'}`}>
-              {item}
-            </button>
-          ))}
-        </div>
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={handleClick}
+        aria-label="Source actions"
+        aria-haspopup="menu"
+        aria-expanded={Boolean(pos)}
+        className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-white/5 hover:text-slate-300"
+      >{Icons.more}</button>
+      {pos && createPortal(
+        <>
+          <div className="fixed inset-0 z-[9998]" onClick={() => setPos(null)} />
+          <div
+            className="fixed z-[9999] w-44 overflow-hidden rounded-xl border border-white/10 bg-slate-900 shadow-2xl"
+            style={{ top: pos.top, right: pos.right }}
+          >
+            {items.map((item) => (
+              <button
+                key={item}
+                type="button"
+                role="menuitem"
+                onClick={() => { onAction(item); setPos(null); }}
+                className={`block w-full px-3 py-2 text-left text-xs transition-colors hover:bg-white/5 ${item === 'Delete' ? 'text-red-400 hover:text-red-300' : 'text-slate-300'}`}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body
       )}
-    </div>
+    </>
   );
 }
 
@@ -127,7 +157,7 @@ function SourceCard({ source, onAction }: { source: DataSource; onAction: (id: s
           <StatusBadge status={source.status} />
           <p className="mt-0.5 text-[10px] text-slate-600">{source.detail}</p>
         </div>
-        <SourceMenu type={source.type} onAction={(a) => onAction(source.id, a)} />
+        <SourceMenu onAction={(a) => onAction(source.id, a)} />
       </div>
     </div>
   );
@@ -139,20 +169,18 @@ function SourceCard({ source, onAction }: { source: DataSource; onAction: (id: s
 
 function AddDataModal({ onClose, onSelect }: { onClose: () => void; onSelect: (type: string) => void }) {
   const options = [
-    { id: 'sql', icon: Icons.database, title: 'SQL Database', desc: 'PostgreSQL, MySQL, SQL Server', color: 'hover:border-blue-500/30 hover:bg-blue-500/5' },
-    { id: 'excel', icon: Icons.excel, title: 'Excel / CSV', desc: 'Import a spreadsheet file', color: 'hover:border-emerald-500/30 hover:bg-emerald-500/5' },
-    { id: 'live', icon: Icons.live, title: 'Live Data', desc: 'WebSocket streams', color: 'hover:border-amber-500/30 hover:bg-amber-500/5' },
-    { id: 'document', icon: Icons.document, title: 'Documents', desc: 'PDF, DOCX, TXT, Markdown', color: 'hover:border-purple-500/30 hover:bg-purple-500/5' },
+    { id: 'sql', icon: Icons.database, title: 'PostgreSQL', desc: 'Connect a database for agent analysis', color: 'hover:border-blue-500/30 hover:bg-blue-500/5' },
+    { id: 'document', icon: Icons.document, title: 'Document', desc: 'Extract and save document insights', color: 'hover:border-cyan-500/30 hover:bg-cyan-500/5' },
   ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
       <div className="w-full max-w-lg rounded-2xl border border-white/[0.08] bg-slate-900/95 p-6 shadow-2xl backdrop-blur-2xl animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
         <div className="mb-6 flex items-center justify-between">
-          <div><h3 className="text-lg font-semibold text-white">Add data</h3><p className="text-xs text-slate-500">What would you like to connect?</p></div>
+          <div><h3 className="text-lg font-semibold text-white">Add schema</h3><p className="text-xs text-slate-500">Which schema source would you like to connect?</p></div>
           <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/5 hover:text-white">{Icons.close}</button>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {options.map((opt) => (
             <button key={opt.id} onClick={() => onSelect(opt.id)} className={`flex flex-col items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-6 text-center transition-all ${opt.color} hover:scale-[1.02] active:scale-[0.98]`}>
               <div className="text-slate-300">{opt.icon}</div>
@@ -203,65 +231,90 @@ function SQLConnectDrawer({ onClose, onAdd }: { onClose: () => void; onAdd: (s: 
   };
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-[420px] border-l border-white/[0.06] bg-slate-900/95 backdrop-blur-2xl shadow-2xl animate-in slide-in-from-right duration-300">
-      <div className="flex h-14 items-center justify-between border-b border-white/[0.06] px-5">
-        <h3 className="text-sm font-semibold text-white">Connect database</h3>
-        <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/5 hover:text-white">{Icons.close}</button>
-      </div>
-      <div className="space-y-5 overflow-y-auto p-5">
+    <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[460px] flex-col border-l border-white/[0.08] bg-[#0b101b] shadow-2xl shadow-black/40 animate-in slide-in-from-right duration-300">
+      <header className="flex shrink-0 items-start justify-between border-b border-white/[0.08] px-5 py-5 sm:px-7">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-400">Data source</p>
+          <h3 className="mt-1 text-base font-semibold text-white">Connect PostgreSQL</h3>
+          <p className="mt-1 text-xs text-slate-400">Enter a read-only connection to discover available tables.</p>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close database connection" className="ml-3 rounded-md p-2 text-slate-400 transition-colors hover:bg-white/[0.07] hover:text-white">{Icons.close}</button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:px-7">
         {step === 'form' ? (
-          <>
-            {[
-              { key: 'dbType', label: 'Database type', type: 'select', options: ['PostgreSQL', 'MySQL', 'SQL Server'] },
-              { key: 'host', label: 'Host', type: 'text', placeholder: 'localhost' },
-              { key: 'port', label: 'Port', type: 'text', placeholder: '5432' },
-              { key: 'database', label: 'Database', type: 'text', placeholder: 'my_db' },
-              { key: 'username', label: 'Username', type: 'text', placeholder: 'user' },
-              { key: 'password', label: 'Password', type: 'password', placeholder: '••••••••' },
-            ].map((field) => (
-              <div key={field.key}>
-                <label className="mb-1.5 block text-xs font-medium text-slate-300">{field.label}</label>
-                {field.type === 'select' ? (
-                  <select value={(form as any)[field.key]} onChange={(e) => setForm((f) => ({ ...f, [field.key]: e.target.value }))} className="h-9 w-full rounded-lg border border-white/10 bg-slate-800/50 px-3 text-xs text-white outline-none focus:border-primary/30">
-                    {field.options?.map((o) => <option key={o}>{o}</option>)}
-                  </select>
-                ) : (
-                  <Input type={field.type} value={(form as any)[field.key]} onChange={(e) => setForm((f) => ({ ...f, [field.key]: e.target.value }))} placeholder={field.placeholder} className="h-9 border-white/10 bg-slate-800/50 text-xs text-white placeholder:text-slate-600 focus-visible:ring-primary/30" />
-                )}
+          <div className="space-y-7">
+            <section aria-labelledby="connection-details-heading">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h4 id="connection-details-heading" className="text-sm font-semibold text-slate-100">Connection details</h4>
+                  <p className="mt-1 text-xs text-slate-500">Credentials are used to test and save this source.</p>
+                </div>
+                <span className="rounded border border-white/[0.08] px-2 py-1 text-[10px] font-medium text-slate-400">PostgreSQL</span>
               </div>
-            ))}
-            <label className="flex items-center gap-2 text-xs text-slate-400">
-              <input type="checkbox" checked={form.ssl} onChange={(e) => setForm((f) => ({ ...f, ssl: e.target.checked }))} className="h-4 w-4 rounded border-white/10 bg-slate-800 text-primary" />
-              SSL connection
+              <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
+                <div className="sm:col-span-2">
+                  <label htmlFor="sql-host" className="mb-1.5 block text-xs font-medium text-slate-300">Host</label>
+                  <Input id="sql-host" autoComplete="off" value={form.host} onChange={(e) => setForm((f) => ({ ...f, host: e.target.value }))} placeholder="db.example.com" className="h-10 w-full border-white/10 bg-slate-800/60 px-3 text-sm text-white placeholder:text-slate-500 focus-visible:ring-primary/30" />
+                </div>
+                <div>
+                  <label htmlFor="sql-port" className="mb-1.5 block text-xs font-medium text-slate-300">Port</label>
+                  <Input id="sql-port" inputMode="numeric" value={form.port} onChange={(e) => setForm((f) => ({ ...f, port: e.target.value }))} placeholder="5432" className="h-10 w-full border-white/10 bg-slate-800/60 px-3 text-sm text-white placeholder:text-slate-500 focus-visible:ring-primary/30" />
+                </div>
+                <div>
+                  <label htmlFor="sql-database" className="mb-1.5 block text-xs font-medium text-slate-300">Database name</label>
+                  <Input id="sql-database" autoComplete="off" value={form.database} onChange={(e) => setForm((f) => ({ ...f, database: e.target.value }))} placeholder="analytics" className="h-10 w-full border-white/10 bg-slate-800/60 px-3 text-sm text-white placeholder:text-slate-500 focus-visible:ring-primary/30" />
+                </div>
+                <div>
+                  <label htmlFor="sql-username" className="mb-1.5 block text-xs font-medium text-slate-300">Username</label>
+                  <Input id="sql-username" autoComplete="username" value={form.username} onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))} placeholder="readonly_user" className="h-10 w-full border-white/10 bg-slate-800/60 px-3 text-sm text-white placeholder:text-slate-500 focus-visible:ring-primary/30" />
+                </div>
+                <div>
+                  <label htmlFor="sql-password" className="mb-1.5 block text-xs font-medium text-slate-300">Password</label>
+                  <Input id="sql-password" type="password" autoComplete="current-password" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} placeholder="Enter password" className="h-10 w-full border-white/10 bg-slate-800/60 px-3 text-sm text-white placeholder:text-slate-500 focus-visible:ring-primary/30" />
+                </div>
+              </div>
+            </section>
+            <label className="flex cursor-pointer items-start gap-3 border-t border-white/[0.07] pt-4">
+              <input type="checkbox" checked={form.ssl} onChange={(e) => setForm((f) => ({ ...f, ssl: e.target.checked }))} className="mt-0.5 h-4 w-4 shrink-0 rounded border-white/10 bg-slate-800 text-primary" />
+              <span>
+                <span className="block text-xs font-medium text-slate-200">Require SSL</span>
+                <span className="mt-0.5 block text-[11px] text-slate-500">Encrypt the connection to your database.</span>
+              </span>
             </label>
-            <Button onClick={handleTest} disabled={testing} className="w-full gap-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90">
-              {testing ? <>{Icons.spinner} Testing...</> : 'Test connection'}
-            </Button>
-          </>
+          </div>
         ) : (
           <>
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+            <div className="mb-6 border-l-2 border-emerald-400 bg-emerald-500/[0.07] px-4 py-3">
               <div className="flex items-center gap-2 text-emerald-400">{Icons.check}<span className="text-sm font-semibold">Connection successful</span></div>
-              <p className="mt-1 text-xs text-emerald-400/70">Database: {form.database}</p>
+              <p className="mt-1 text-xs text-emerald-300/70">{form.host} · {form.database}</p>
             </div>
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Tables</p>
-              <div className="space-y-2">
-                {tables.map((t) => (
-                  <label key={t} className="flex items-center gap-3 rounded-lg border border-white/5 bg-white/[0.02] p-3 transition-colors hover:border-white/10">
-                    <input type="checkbox" checked={selectedTables.includes(t)} onChange={(e) => setSelectedTables((prev) => (e.target.checked ? [...prev, t] : prev.filter((x) => x !== t)))} className="h-4 w-4 rounded border-white/10 bg-slate-800 text-primary" />
-                    <span className="text-xs text-slate-300">{t}</span>
-                  </label>
-                ))}
-              </div>
+            <div className="mb-3 flex items-center justify-between">
+              <div><h4 className="text-sm font-semibold text-slate-100">Choose tables</h4><p className="mt-1 text-xs text-slate-500">Select the tables agents may use.</p></div>
+              <span className="text-xs text-slate-500">{selectedTables.length} selected</span>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setStep('form')} className="flex-1 border-white/10 bg-transparent text-slate-300 hover:bg-white/5">Back</Button>
-              <Button onClick={handleImport} className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90">Import schema</Button>
+            <div className="space-y-1 border-y border-white/[0.07] py-2">
+              {tables.map((table) => (
+                <label key={table} className="flex cursor-pointer items-center gap-3 px-2 py-2.5 transition-colors hover:bg-white/[0.035]">
+                  <input type="checkbox" checked={selectedTables.includes(table)} onChange={(e) => setSelectedTables((prev) => (e.target.checked ? [...prev, table] : prev.filter((item) => item !== table)))} className="h-4 w-4 rounded border-white/10 bg-slate-800 text-primary" />
+                  <span className="text-xs text-slate-300">{table}</span>
+                </label>
+              ))}
             </div>
           </>
         )}
       </div>
+      <footer className="flex shrink-0 justify-end gap-2 border-t border-white/[0.08] bg-[#0b101b] px-5 py-4 sm:px-7">
+        {step === 'form' ? (
+          <Button onClick={handleTest} disabled={testing || !form.host.trim() || !form.database.trim() || !form.username.trim() || !form.password} className="h-10 w-full gap-2 rounded-md bg-primary px-5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">
+            {testing ? <>{Icons.spinner} Testing connection…</> : 'Test connection'}
+          </Button>
+        ) : (
+          <>
+            <Button variant="outline" onClick={() => setStep('form')} className="h-10 rounded-md border-white/10 bg-transparent px-4 text-sm text-slate-300 hover:bg-white/5">Back</Button>
+            <Button onClick={handleImport} disabled={selectedTables.length === 0} className="h-10 rounded-md bg-primary px-5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50">Import {selectedTables.length} tables</Button>
+          </>
+        )}
+      </footer>
     </div>
   );
 }
@@ -467,42 +520,23 @@ function LiveDataDrawer({ onClose, onAdd }: { onClose: () => void; onAdd: (s: Da
    ═══════════════════════════════════════════════════════════════ */
 
 function DocumentUploadDrawer({ onClose, onAdd }: { onClose: () => void; onAdd: (s: DataSource) => void }) {
-  const [step, setStep] = useState<'drop' | 'processing' | 'done'>('drop');
-  const [progress, setProgress] = useState(0);
-  const [doc, setDoc] = useState<{ name: string; pages: number; size: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
-  const handleFile = async (files: FileList) => {
-        setStep('processing');
+  const handleFile = async (file: File) => {
+    setUploading(true);
     try {
-      const docs = await uploadDocuments(files);
-      setDoc(docs[0]);
-      // Poll for progress or simulate steps until backend provides real progress
-      for (let i = 0; i <= 100; i += 25) {
-        setProgress(i);
-        await new Promise((r) => setTimeout(r, 300));
-      }
-      setStep('done');
+      const source = await uploadDocument(file);
+      onAdd(source);
+      toast({ title: 'Document indexed', description: source.name });
+      onClose();
     } catch (e: any) {
       toast({ title: 'Upload failed', description: e.message, variant: 'destructive' });
-      setStep('drop');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
     }
-  };
-
-  const handleFinish = () => {
-    if (!doc) return;
-    onAdd({
-      id: `doc_${Date.now()}`,
-      type: 'document',
-      name: doc.name,
-      subtype: 'PDF',
-      status: 'indexed',
-      meta: `${doc.pages} pages`,
-      detail: 'Indexed',
-      size: doc.size,
-    });
-    onClose();
   };
 
   return (
@@ -512,11 +546,11 @@ function DocumentUploadDrawer({ onClose, onAdd }: { onClose: () => void; onAdd: 
         <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/5 hover:text-white">{Icons.close}</button>
       </div>
       <div className="space-y-5 overflow-y-auto p-5">
-        {step === 'drop' && (
-          <div onClick={() => fileRef.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); e.dataTransfer.files.length && handleFile(e.dataTransfer.files); }} className="flex cursor-pointer flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-white/10 bg-white/[0.02] py-12 text-center transition-colors hover:border-primary/30 hover:bg-primary/5">
-            <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.md" multiple className="hidden" onChange={(e) => e.target.files?.length && handleFile(e.target.files)} />
+        <>
+          <div onClick={() => !uploading && fileRef.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const file = e.dataTransfer.files[0]; if (file && !uploading) void handleFile(file); }} className="flex cursor-pointer flex-col items-center gap-3 rounded-xl border border-dashed border-white/10 bg-white/[0.02] py-12 text-center transition-colors hover:border-primary/30 hover:bg-primary/5">
+            <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.md,.csv" className="hidden" disabled={uploading} onChange={(e) => e.target.files?.[0] && void handleFile(e.target.files[0])} />
             <div className="text-slate-500">{Icons.upload}</div>
-            <p className="text-sm font-medium text-white">Drop files here</p>
+            <p className="text-sm font-medium text-white">{uploading ? 'Extracting and saving…' : 'Drop a document here'}</p>
             <div className="flex gap-2 text-[10px] text-slate-500">
               <span className="rounded bg-white/5 px-2 py-0.5">PDF</span>
               <span className="rounded bg-white/5 px-2 py-0.5">Word</span>
@@ -524,45 +558,8 @@ function DocumentUploadDrawer({ onClose, onAdd }: { onClose: () => void; onAdd: 
               <span className="rounded bg-white/5 px-2 py-0.5">Markdown</span>
             </div>
           </div>
-        )}
-
-        {step === 'processing' && doc && (
-          <div className="space-y-6 py-8 text-center">
-            <div className="relative mx-auto h-24 w-24">
-              <svg className="h-full w-full -rotate-90" viewBox="0 0 36 36">
-                <path className="text-white/5" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="3" />
-                <path className="text-primary transition-all duration-300" strokeDasharray={`${progress}, 100`} d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="3" />
-              </svg>
-              <div className="absolute inset-0 flex items-center justify-center text-sm font-bold text-white">{progress}%</div>
-            </div>
-
-            <div>
-              <p className="text-sm font-semibold text-white">{doc.name}</p>
-              <div className="mt-3 space-y-2 text-left">
-                {['Uploaded', 'Text extracted', 'Document analyzed', 'Creating index'].map((label, i) => (
-                  <div key={label} className="flex items-center gap-2 text-xs">
-                    <span className={`flex h-4 w-4 items-center justify-center rounded-full ${i * 25 < progress ? 'bg-emerald-500/20 text-emerald-400' : 'bg-white/5 text-slate-600'}`}>
-                      {i * 25 < progress ? Icons.check : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
-                    </span>
-                    <span className={i * 25 < progress ? 'text-slate-300' : 'text-slate-600'}>{label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {step === 'done' && doc && (
-          <div className="space-y-4">
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-center">
-              <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">{Icons.check}</div>
-              <p className="text-sm font-semibold text-white">{doc.name}</p>
-              <p className="text-xs text-slate-500">{doc.pages} pages · {doc.size}</p>
-              <p className="mt-1 text-[10px] font-medium text-emerald-400">✓ Indexed</p>
-            </div>
-            <Button onClick={handleFinish} className="w-full bg-primary text-primary-foreground hover:bg-primary/90">Done</Button>
-          </div>
-        )}
+          <p className="text-xs text-slate-500">Extraction runs on the server. The saved record includes its summary and detected insights.</p>
+        </>
       </div>
     </div>
   );
@@ -576,9 +573,9 @@ export default function DataSourcesPage() {
   const [sources, setSources] = useState<DataSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
-  const [drawer, setDrawer] = useState<'sql' | 'excel' | 'live' | 'document' | null>(null);
+  const [drawer, setDrawer] = useState<'sql' | 'excel' | 'document' | null>(null);
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<'all' | 'structured' | 'live' | 'documents'>('all');
+  const [filter, setFilter] = useState<'all' | 'structured' | 'documents'>('all');
   const { toast } = useToast();
 
   useEffect(() => {
@@ -590,22 +587,21 @@ export default function DataSourcesPage() {
 
   const filtered = sources.filter((s) => {
     const matchesSearch = s.name.toLowerCase().includes(search.toLowerCase());
-    const matchesFilter = filter === 'all' || s.type === filter;
+    const matchesFilter = filter === 'all' || s.type === (filter === 'documents' ? 'document' : filter);
     return matchesSearch && matchesFilter;
   });
 
   const grouped = {
     structured: filtered.filter((s) => s.type === 'structured'),
-    live: filtered.filter((s) => s.type === 'live'),
     document: filtered.filter((s) => s.type === 'document'),
   };
 
   const handleAdd = (source: DataSource) => {
-    setSources((prev) => [source, ...prev]);
+    setSources((prev) => [normalizeDataSource(source), ...prev]);
   };
 
   const handleMenuAction = async (id: string, action: string) => {
-    if (action === 'Remove') {
+    if (action === 'Delete') {
       try {
         await deleteDataSource(id);
         setSources((prev) => prev.filter((s) => s.id !== id));
@@ -613,8 +609,6 @@ export default function DataSourcesPage() {
       } catch (e: any) {
         toast({ title: 'Remove failed', description: e.message, variant: 'destructive' });
       }
-    } else {
-      toast({ title: action, description: 'Not yet implemented' });
     }
   };
 
@@ -633,30 +627,31 @@ export default function DataSourcesPage() {
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-slate-950 text-slate-200">
-      <div className="pointer-events-none fixed inset-0 opacity-[0.15]" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
-      <div className="pointer-events-none fixed -left-32 top-0 h-[500px] w-[500px] rounded-full bg-primary/5 blur-[120px] animate-pulse" />
-      <div className="pointer-events-none fixed -right-32 bottom-0 h-[400px] w-[400px] rounded-full bg-cyan-500/5 blur-[100px] animate-pulse" style={{ animationDelay: '2s' }} />
-
-      <div className="relative mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="relative min-h-full" style={{ color: 'var(--text-primary)' }}>
+      <div className="mx-auto max-w-5xl">
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight text-white">Data</h1>
-            <p className="mt-2 text-sm text-slate-400">Connect and manage the data available to your dashboards and agents.</p>
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>TarQ · Schemas</p>
+            <h1 className="text-2xl font-bold tracking-tight">Schemas</h1>
+            <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>Connect and manage schema sources for your dashboards and agents.</p>
           </div>
-          <Button onClick={() => setModalOpen(true)} className="gap-2 rounded-full bg-white px-5 text-sm font-medium text-slate-950 shadow-lg shadow-white/10 transition-all hover:shadow-xl hover:shadow-white/15 hover:scale-[1.02] active:scale-[0.98]">
+          <button
+            onClick={() => setModalOpen(true)}
+            className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold text-white transition-all hover:opacity-90 hover:scale-[1.02] active:scale-[0.98]"
+            style={{ background: 'linear-gradient(135deg,var(--accent),var(--accent-cyan))', boxShadow: '0 0 16px var(--accent-glow)' }}
+          >
             {Icons.plus}
-            Add data
-          </Button>
+            Add schema
+          </button>
         </div>
 
         <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative flex-1">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">{Icons.search}</span>
-            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search data..." className="h-9 border-white/10 bg-slate-900/50 pl-9 text-sm text-white placeholder:text-slate-600 focus-visible:ring-primary/30" />
+            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search schemas..." className="h-9 border-white/10 bg-slate-900/50 pl-9 text-sm text-white placeholder:text-slate-600 focus-visible:ring-primary/30" />
           </div>
           <div className="flex gap-2">
-            {(['all', 'structured', 'live', 'documents'] as const).map((f) => (
+            {(['all', 'structured', 'documents'] as const).map((f) => (
               <button key={f} onClick={() => setFilter(f)} className={`rounded-full px-3 py-1.5 text-xs font-medium capitalize transition-all ${filter === f ? 'bg-white/10 text-white ring-1 ring-white/10' : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'}`}>
                 {f}
               </button>
@@ -671,13 +666,12 @@ export default function DataSourcesPage() {
         ) : filtered.length === 0 ? (
           <div className="flex min-h-[40vh] flex-col items-center justify-center gap-4 text-slate-600">
             <div className="rounded-2xl bg-white/[0.02] p-6 ring-1 ring-white/5">{Icons.database}</div>
-            <p className="text-sm">No data sources found</p>
-            <Button variant="outline" onClick={() => setModalOpen(true)} className="border-white/10 bg-transparent text-xs text-slate-400 hover:bg-white/5 hover:text-white">Add your first source</Button>
+            <p className="text-sm">No schemas found</p>
+            <Button variant="outline" onClick={() => setModalOpen(true)} className="border-white/10 bg-transparent text-xs text-slate-400 hover:bg-white/5 hover:text-white">Add your first schema</Button>
           </div>
         ) : (
           <>
-            <Section title="Structured data" items={grouped.structured} />
-            <Section title="Live data" items={grouped.live} />
+            <Section title="Structured schemas" items={grouped.structured} />
             <Section title="Documents" items={grouped.document} />
           </>
         )}
@@ -686,7 +680,6 @@ export default function DataSourcesPage() {
       {modalOpen && <AddDataModal onClose={() => setModalOpen(false)} onSelect={(t) => { setModalOpen(false); setDrawer(t as any); }} />}
       {drawer === 'sql' && <SQLConnectDrawer onClose={() => setDrawer(null)} onAdd={handleAdd} />}
       {drawer === 'excel' && <ExcelImportDrawer onClose={() => setDrawer(null)} onAdd={handleAdd} />}
-      {drawer === 'live' && <LiveDataDrawer onClose={() => setDrawer(null)} onAdd={handleAdd} />}
       {drawer === 'document' && <DocumentUploadDrawer onClose={() => setDrawer(null)} onAdd={handleAdd} />}
     </div>
   );

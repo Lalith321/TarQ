@@ -5,7 +5,7 @@ import pandas as pd
 from typing import Optional, Type, Dict, Any
 from pydantic import BaseModel, Field
 
-from sqlalchemy import create_engine
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.pool import StaticPool
 from langchain_community.utilities import SQLDatabase
 from langchain_community.tools.sql_database.tool import (
@@ -15,6 +15,7 @@ from langchain_community.tools.sql_database.tool import (
 )
 from langchain_core.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
+from ..core.workspace_paths import workspace_dir
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +47,8 @@ class SandboxExportQuerySQLTool(BaseSQLDatabaseTool, BaseTool):
         "saved to a CSV file in the sandbox scratch directory for processing. Returns file path and preview metadata."
     )
     args_schema: Type[BaseModel] = CustomQuerySQLInput
-    sandbox_dir: str = "sandbox_data"
+    sandbox_dir: str = str(workspace_dir() / "analyst_sandbox")
+    sandbox_backend: Any = None
 
     def _run(
         self, 
@@ -67,19 +69,27 @@ class SandboxExportQuerySQLTool(BaseSQLDatabaseTool, BaseTool):
                     "columns": list(df.columns)
                 })
 
-            # 2. Ensure destination sandbox directory exists
-            os.makedirs(self.sandbox_dir, exist_ok=True)
-
-            # 3. Create unique file path & save raw CSV
+            # 2. Create a unique CSV path in the active sandbox workspace
             file_id = f"query_{uuid.uuid4().hex[:8]}"
             filename = f"{file_id}.csv"
-            file_path = os.path.join(self.sandbox_dir, filename)
-            df.to_csv(file_path, index=False)
+            if self.sandbox_backend is not None:
+                file_path = os.path.join(self.sandbox_backend.workspace_root, filename)
+                manifest_path = os.path.join(self.sandbox_backend.workspace_root, "MANIFEST.json")
+            else:
+                os.makedirs(self.sandbox_dir, exist_ok=True)
+                file_path = os.path.join(self.sandbox_dir, filename)
+                manifest_path = os.path.join(self.sandbox_dir, "MANIFEST.json")
 
-            # 4. Read or initialize MANIFEST.json for sandbox tracking
-            manifest_path = os.path.join(self.sandbox_dir, "MANIFEST.json")
+            # 3. Read or initialize MANIFEST.json for sandbox tracking
             manifest_data = {}
-            if os.path.exists(manifest_path):
+            if self.sandbox_backend is not None:
+                manifest_result = self.sandbox_backend.read_file(manifest_path)
+                if manifest_result.success:
+                    try:
+                        manifest_data = json.loads(manifest_result.stdout)
+                    except (json.JSONDecodeError, TypeError):
+                        manifest_data = {}
+            elif os.path.exists(manifest_path):
                 try:
                     with open(manifest_path, "r", encoding="utf-8") as f:
                         manifest_data = json.load(f)
@@ -94,8 +104,23 @@ class SandboxExportQuerySQLTool(BaseSQLDatabaseTool, BaseTool):
                 "columns": list(df.columns),
                 "created_at": pd.Timestamp.now().isoformat()
             }
-            with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump(manifest_data, f, indent=2)
+
+            # 4. Write through the backend so isolated workers can access the files
+            if self.sandbox_backend is not None:
+                csv_result = self.sandbox_backend.upload_file(
+                    file_path, df.to_csv(index=False).encode("utf-8")
+                )
+                if not csv_result.success:
+                    raise RuntimeError(csv_result.stderr or f"Failed to upload {file_path}")
+                manifest_result = self.sandbox_backend.upload_file(
+                    manifest_path, json.dumps(manifest_data, indent=2).encode("utf-8")
+                )
+                if not manifest_result.success:
+                    raise RuntimeError(manifest_result.stderr or f"Failed to upload {manifest_path}")
+            else:
+                df.to_csv(file_path, index=False)
+                with open(manifest_path, "w", encoding="utf-8") as f:
+                    json.dump(manifest_data, f, indent=2)
 
             # 6. Generate lightweight preview payload for LLM Context Window
             preview_rows = df.head(3).to_dict(orient="records")
@@ -125,42 +150,64 @@ class SandboxExportQuerySQLTool(BaseSQLDatabaseTool, BaseTool):
 # ---------------------------------------------------------------------------
 # Factory Function Replacement
 # ---------------------------------------------------------------------------
-def create_sql_tools(db_path: str, sandbox_dir: str = "sandbox_data"):
+def create_sql_tools(
+    db_path: str | None = None,
+    sandbox_dir: str | None = None,
+    *,
+    sandbox_backend: Any = None,
+    engine: Engine | None = None,
+    include_tables: list[str] | None = None,
+    schema: str | None = None,
+    tool_name_prefix: str | None = None,
+):
     """
-    Create SQL tools for given database path with CSV output redirected to sandbox.
+    Create SQL tools for a database engine with CSV output redirected to sandbox.
     """
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    import atexit
-    atexit.register(engine.dispose)
-    
-    db = SQLDatabase(engine)
+    sandbox_dir = sandbox_dir or str(workspace_dir() / "analyst_sandbox")
+    if engine is None:
+        if db_path is None:
+            raise ValueError("db_path is required when engine is not provided")
+        engine = create_engine(
+            f"sqlite:///{db_path}",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        import atexit
+        atexit.register(engine.dispose)
+
+    db = SQLDatabase(engine, schema=schema, include_tables=include_tables)
+    prefix = f"{tool_name_prefix}_" if tool_name_prefix else ""
     
     # Custom Sandbox Middleware SQL Tool
     query_sql_database_tool = SandboxExportQuerySQLTool(
         db=db,
+        name=f"{prefix}query_sql_database_tool",
+        description=(
+            f"Execute SELECT queries against {tool_name_prefix}. Results are automatically saved "
+            "to a CSV file in the sandbox scratch directory. Returns file path and preview metadata."
+            if tool_name_prefix
+            else SandboxExportQuerySQLTool.description
+        ),
         handle_tool_error=True,
         handle_validation_error=True,
         sandbox_dir=sandbox_dir,
+        sandbox_backend=sandbox_backend,
     )
     
     list_sql_database_tool = ListSQLDatabaseTool(
         db=db, 
         handle_tool_error=True, 
         handle_validation_error=True, 
-        name="list_sql_database_tool",
-        description="List all available tables in the database. Use this FIRST to see what financial data tables exist."
+        name=f"{prefix}list_sql_database_tool",
+        description=f"List available tables in {tool_name_prefix}." if tool_name_prefix else "List all available tables in the database. Use this FIRST to see what financial data tables exist."
     )
     
     schema_sql_database_tool = InfoSQLDatabaseTool(
         db=db, 
         handle_tool_error=True, 
         handle_validation_error=True, 
-        name="schema_sql_database_tool",
-        description="Get detailed schema information for specific tables. Use this to understand column names and data types."
+        name=f"{prefix}schema_sql_database_tool",
+        description=f"Get schema details for tables in {tool_name_prefix}." if tool_name_prefix else "Get detailed schema information for specific tables. Use this to understand column names and data types."
     )
     
     return [query_sql_database_tool, list_sql_database_tool, schema_sql_database_tool]

@@ -202,7 +202,13 @@ export const GlobeHoverCards: React.FC<Props> = ({ camera, renderer, globe }) =>
   const mouseRef = useRef({ x: -9999, y: -9999 });
   const cardsRef = useRef<Map<string, CardState>>(new Map());
   const usedSlotsRef = useRef<Set<number>>(new Set());
-  const [, setFrame] = useState(0); // bump to force re-render each tick
+  const [renderCards, setRenderCards] = useState<CardState[]>([]);
+  const lastRenderTimeRef = useRef(0);
+
+  const syncRenderCards = () => {
+    const nextCards = Array.from(cardsRef.current.values());
+    setRenderCards(nextCards);
+  };
 
   useEffect(() => {
     const canvas = renderer.domElement;
@@ -295,7 +301,12 @@ export const GlobeHoverCards: React.FC<Props> = ({ camera, renderer, globe }) =>
         }
       }
 
-      setFrame((f) => f + 1);
+      const now = performance.now();
+      if (now - lastRenderTimeRef.current >= 33) {
+        syncRenderCards();
+        lastRenderTimeRef.current = now;
+      }
+
       animId = requestAnimationFrame(tick);
     };
 
@@ -312,7 +323,7 @@ export const GlobeHoverCards: React.FC<Props> = ({ camera, renderer, globe }) =>
     return { x: sp.x * wHalf + wHalf, y: -(sp.y * hHalf) + hHalf };
   };
 
-  const cards = Array.from(cardsRef.current.values());
+  const cards = renderCards;
 
   return (
     <div className="globe-hover-cards">

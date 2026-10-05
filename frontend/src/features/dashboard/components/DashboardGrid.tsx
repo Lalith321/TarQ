@@ -5,6 +5,7 @@ import WidgetRenderer from './widgets/WidgetRenderer';
 interface Props {
   widgets: WidgetSpec[];
   onDrillDown: (widget: WidgetSpec, row: Record<string, any>) => void;
+  dashboardId?: string;
 }
 
 const GRID_COLUMNS = 12;
@@ -62,7 +63,7 @@ function normalizeWidgets(widgets: WidgetSpec[]): WidgetSpec[] {
   });
 }
 
-export function DashboardGrid({ widgets, onDrillDown }: Props) {
+export function DashboardGrid({ widgets, onDrillDown, dashboardId }: Props) {
   const placed = useMemo(() => normalizeWidgets(widgets), [widgets]);
 
   // Compute canvas size from widget extents
@@ -104,6 +105,7 @@ export function DashboardGrid({ widgets, onDrillDown }: Props) {
             <WidgetRenderer
               widget={widget}
               onDrillDown={widget.drill_down?.enabled ? onDrillDown : undefined}
+              dashboardId={dashboardId}
             />
           </div>
         );

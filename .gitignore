@@ -60,3 +60,10 @@ docker-compose.override.yml
 # Temporary files
 *.tmp
 *.temp
+
+# AI-generated projects, intermediate datasets, and artifacts
+/workspace/*
+!/workspace/.gitkeep
+/backend/sandbox/
+/backend/sandbox_data/
+/backend/sandbox_subprocess/

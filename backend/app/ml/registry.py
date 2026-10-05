@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,9 +10,10 @@ import pandas as pd
 from sklearn.pipeline import Pipeline
 
 from .trainer import TrainingReport
+from ..core.workspace_paths import workspace_dir
 
-_MODEL_DIR = Path(tempfile.gettempdir()) / "dashboard_platform_models"
-_MODEL_DIR.mkdir(exist_ok=True)
+_MODEL_DIR = workspace_dir() / "models"
+_MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass

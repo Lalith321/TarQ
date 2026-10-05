@@ -1,30 +1,41 @@
-// AnalystPage.tsx
 import AnalystPanel from '@/features/analyst/AnalystPanel';
 
 export default function AnalystPage() {
   return (
-    <div className="relative min-h-screen overflow-hidden bg-slate-950 text-slate-200">
-      <div className="pointer-events-none fixed inset-0 opacity-[0.15]" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
-      <div className="pointer-events-none fixed -left-32 top-0 h-[500px] w-[500px] rounded-full bg-primary/5 blur-[120px] animate-pulse" />
-      <div className="pointer-events-none fixed -right-32 bottom-0 h-[400px] w-[400px] rounded-full bg-cyan-500/5 blur-[100px] animate-pulse" style={{ animationDelay: '2s' }} />
+    <div className="relative min-h-full" style={{ color: 'var(--text-primary)' }}>
+      {/* Static ambient — no animation, no flicker */}
+      <div
+        className="pointer-events-none fixed inset-0 -z-10"
+        style={{
+          background:
+            'radial-gradient(ellipse 60% 40% at 10% 0%, rgba(59,130,246,0.06) 0%, transparent 70%), ' +
+            'radial-gradient(ellipse 50% 35% at 90% 100%, rgba(6,182,212,0.05) 0%, transparent 70%)',
+        }}
+      />
 
-      <div className="relative mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <div className="mb-8 flex items-end justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight text-white">AI Analyst</h1>
-            <p className="mt-2 text-sm text-slate-400">Configure your agent fleet and inject analytical prompts.</p>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-            </span>
-            System operational
-          </div>
+      {/* Page header */}
+      <div className="mb-6 flex items-end justify-between">
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+            TarQ · AI Analyst
+          </p>
+          <h1 className="text-2xl font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>
+            Agent Fleet
+          </h1>
+          <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+            Configure agents and set behaviour instructions.
+          </p>
         </div>
-
-        <AnalystPanel />
+        <div className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ background: 'var(--status-ok)' }} />
+            <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: 'var(--status-ok)' }} />
+          </span>
+          System operational
+        </div>
       </div>
+
+      <AnalystPanel />
     </div>
   );
 }

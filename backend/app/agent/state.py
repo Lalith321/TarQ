@@ -31,6 +31,8 @@ class GraphState(MessagesState):
     todo: list[Task]
     # The specific instruction the Coordinator passes to the active agent this turn
     current_task: str
+    # Validated schema IDs and table names for this request; never credentials.
+    selected_sources: list[dict]
 
 
 class TodoUpdate(BaseModel):

@@ -48,6 +48,8 @@ from typing import Any
 
 import docker
 
+from ..core.workspace_paths import workspace_dir, workspace_host_dir
+
 
 @dataclass
 class ExecutionResult:
@@ -127,17 +129,21 @@ class DockerBackend(SandboxBackend):
     def __init__(
         self,
         image: str = "python:3.12-slim",
-        volume: str = "./sandbox",
+        volume: str | None = None,
         memory: str = "512m",
         cpus: float = 1.0,
         timeout: int = 30,
+        install_node: bool = False,
+        pids_limit: int = 64,
     ):
         self.image = image
-        self.volume = os.path.abspath(volume)
+        self.volume = os.path.abspath(volume or str(workspace_host_dir()))
         self.workspace_root = "/workspace"
         self.memory = memory
         self.cpus = cpus
         self.timeout = timeout
+        self.install_node = install_node
+        self.pids_limit = pids_limit
         self._client = docker.from_env()
         self._container = None
 
@@ -168,10 +174,30 @@ class DockerBackend(SandboxBackend):
             cap_drop=["ALL"],
             cap_add=["DAC_OVERRIDE"],
             security_opt=["no-new-privileges"],
-            pids_limit=64,
+            pids_limit=self.pids_limit,
             volumes={self.volume: {"bind": self.workspace_root, "mode": "rw"}},
             working_dir=self.workspace_root,
         )
+        if self.install_node:
+            exit_code, output = self._container.exec_run(
+                [
+                    "sh", "-lc",
+                    "command -v npx >/dev/null 2>&1 || "
+                    "(apt-get -o APT::Sandbox::User=root update && "
+                    "DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root "
+                    "install -y --no-install-recommends nodejs npm libnspr4 libnss3 "
+                    "libdbus-1-3 libatk1.0-0 libgbm-dev libasound2 libxrandr2 "
+                    "libxkbcommon-dev libxfixes3 libxcomposite1 libxdamage1 "
+                    "libpango-1.0-0 libcairo2 libcups2 libatk-bridge2.0-0 "
+                    "&& rm -rf /var/lib/apt/lists/*)",
+                ],
+                demux=True,
+                environment={"DEBIAN_FRONTEND": "noninteractive"},
+            )
+            if exit_code != 0:
+                details = ((output[1] or output[0] or b"").decode("utf-8", errors="replace"))
+                self.stop()
+                raise RuntimeError(f"Failed to install Node.js/npm in narrator sandbox: {details}")
         return self
 
     def stop(self):
@@ -494,7 +520,7 @@ class CloudRunSandboxBackend(SandboxBackend):
     def __init__(
         self,
         session_name: str = "agent-sandbox",
-        host_workspace: str = "/tmp/sandbox_workspace",
+        host_workspace: str | None = None,
         sandbox_workspace: str = "/workspace",
         python_bin: str = "/usr/bin/python3",
         timeout: int = 30,
@@ -503,7 +529,9 @@ class CloudRunSandboxBackend(SandboxBackend):
         idle_seconds: int = 12 * 60 * 60,
     ):
         self.session_name = session_name
-        self.host_workspace = os.path.abspath(host_workspace)
+        self.host_workspace = os.path.abspath(
+            host_workspace or str(workspace_dir() / "cloudrun_sandbox")
+        )
         self.workspace_root = sandbox_workspace
         self.python_bin = python_bin
         self.timeout = timeout
@@ -857,13 +885,15 @@ class SubprocessBackend(SandboxBackend):
 
     def __init__(
         self,
-        workspace: str = "./sandbox_subprocess",
+        workspace: str | None = None,
         python_bin: str | None = None,
         timeout: int = 30,
         cpu_seconds: int = 20,
     ):
         import sys
-        self.workspace_root = os.path.abspath(workspace)
+        self.workspace_root = os.path.abspath(
+            workspace or str(workspace_dir() / "analyst_sandbox")
+        )
         self.python_bin = python_bin or sys.executable
         self.timeout = timeout
         self.cpu_seconds = cpu_seconds

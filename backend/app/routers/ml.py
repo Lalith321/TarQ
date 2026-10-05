@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -9,11 +8,12 @@ from fastapi import APIRouter, HTTPException, UploadFile, Form
 
 from app.ml.registry import model_registry
 from app.ml.service import train_and_register
+from app.core.workspace_paths import workspace_dir
 
 router = APIRouter(prefix="/ml", tags=["ml"])
 
-_UPLOAD_DIR = Path(tempfile.gettempdir()) / "dashboard_platform_ml_uploads"
-_UPLOAD_DIR.mkdir(exist_ok=True)
+_UPLOAD_DIR = workspace_dir() / "uploads" / "ml"
+_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @router.post("/train")

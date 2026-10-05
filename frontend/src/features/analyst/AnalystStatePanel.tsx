@@ -2,11 +2,31 @@ import React, { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { fetchAnalystState } from '@/services/analystService';
-import type { AnalystState } from '@/services/types';
+import { WidgetRenderer } from '@/components/WidgetRenderer';
+import type { AnalystState, WidgetSpec } from '@/services/types';
+import { buildLineChartModel } from '@/lib/lineChartData';
 
 interface Props {
   sessionId: string | null;
   refreshKey?: number;
+}
+
+/** Convert dashboard_tool's {data, x_field, y_field} shape → WidgetRenderer's {series, labels} shape */
+function adaptWidget(w: Record<string, any>): WidgetSpec {
+  const rows: Record<string, any>[] = w.data ?? [];
+  const xField: string = w.x_field ?? 'x';
+  const chart = buildLineChartModel(rows, xField, w.y_field, w.group_by);
+  const series = chart.series.map(({ key, name }) => ({
+    name,
+    data: chart.data.map((row) => ({ x: row[xField], y: row[key] })),
+  }));
+
+  return {
+    ...w,
+    series,
+    labels: chart.labels,
+    position: w.position ?? { x: 0, y: 0, w: 4, h: 2 },
+  } as unknown as WidgetSpec;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -63,19 +83,14 @@ export default function AnalystStatePanel({ sessionId, refreshKey }: Props) {
 
       {/* Widgets produced */}
       {state.widgets.length > 0 && (
-        <Card className="p-4 border-white/[0.06] bg-white/[0.02]">
-          <h4 className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">
+        <div className="space-y-3">
+          <h4 className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
             Widgets produced ({state.widgets.length})
           </h4>
-          <div className="space-y-1">
-            {state.widgets.map((w, i) => (
-              <div key={w.id ?? i} className="flex items-center gap-2 text-xs text-slate-300">
-                <Badge variant="outline" className="text-[9px]">{w.type}</Badge>
-                {w.title}
-              </div>
-            ))}
-          </div>
-        </Card>
+          {state.widgets.map((w, i) => (
+            <WidgetRenderer key={w.id ?? i} widget={adaptWidget(w)} />
+          ))}
+        </div>
       )}
 
       {/* Artifacts */}

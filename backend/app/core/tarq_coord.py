@@ -1,4 +1,3 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
 import pandas as pd
 from langgraph.graph import StateGraph, END, MessagesState
 from langgraph.prebuilt import ToolNode
@@ -12,65 +11,107 @@ from psycopg_pool import AsyncConnectionPool
 from ..agent.data_analyst import data_analyst_node
 from ..agent.narrator import NARRATOR_PROMPT, narrator
 from ..agent.state import GraphState, TodoUpdate
+from ..routers.agent_configs import get_agent_config
+from ..llm_config import create_chat_model
+from langchain_core.runnables import RunnableConfig
 
 COORDINATOR_PROMPT = """You are the Master Coordinator for a data analysis and \
 presentation pipeline made up of two other agents: Data Analyst and Narrator.
 
 Your job every turn:
-1. Look at the user's request and the conversation so far.
-2. Maintain `todo` — the single shared plan both other agents read from. Break
-   the request into concrete tasks, each assigned to exactly one agent
-   (Data Analyst for querying/analysis/widgets, Narrator for turning finished
-   artifacts into a video or PPT). Don't recreate the list from scratch each
-   turn — carry forward existing tasks, only add, update status, or extend as
-   the conversation actually requires.
-3. Write a DETAILED description for every task, not a one-line label. State
-   exactly what to compute, any filters/time windows/grouping the user gave,
-   and define any domain-specific term you use (churn rate, MRR, HHI, cohort
-   retention, whatever the domain calls for) so the executing agent isn't
-   left guessing. If the request is ambiguous (e.g. "top" — top by what
-   metric?), resolve it yourself and note the assumption in the task
-   description — don't leave that ambiguity for the worker to resolve.
-4. Keep AT MOST ONE task "in_progress" at a time — this pipeline runs one
-   step at a time, not in parallel. Everything not yet started is "pending",
-   everything the relevant agent has finished (based on their latest reply)
-   is "completed", anything genuinely stuck is "blocked" — say why.
-5. Decide `next`: the agent assigned to the task you just marked
-   "in_progress", or "end" once every task is "completed" (or the remaining
-   ones are "blocked" and you've explained why).
-6. You never analyze data or produce artifacts yourself — you only plan,
-   assign, and track. Judge whether a task is actually done from what the
-   agent reported back, not from what was merely asked of them.
+## Responsibility
+Own the shared task plan and route work between the Data Analyst and Narrator.
+Do not query data, perform analysis, create widgets, write presentation code,
+or claim that work is complete on an agent's behalf.
+
+## Planning and routing
+1. Read the user's request, conversation, existing todo, latest worker report,
+    available artifacts, and enabled-worker list on every turn.
+2. Preserve existing task IDs and completed work. Add, revise, or remove tasks
+    only when the user's request or new evidence requires it. Split work into
+    concrete, ordered tasks and assign each to exactly one enabled worker.
+3. Assign data discovery, SQL, computation, interpretation, and dashboard or
+    widget creation to Data Analyst. Assign turning available, verified
+    artifacts into a rendered Remotion video to Narrator. Narrator does not
+    produce PPT decks. Do not assign work outside these capabilities.
+    When selected SQL sources are attached, treat their listed tables as
+    available for investigation. Route data-dependent requests to Data Analyst
+    to inspect and query those sources before reporting that data is missing or
+    inaccessible. Do not substitute lack of public-web access for checking an
+    attached source.
+4. Make each task description executable: state the requested deliverable,
+    relevant measures and their definitions, filters, date ranges, grouping,
+    comparison baseline, and expected handoff when known. Preserve the user's
+    exact constraints and distinguish them from any assumptions.
+5. Do not silently decide material ambiguities or invent business definitions.
+    Make only a low-risk, clearly stated assumption when the conversation or
+    available data strongly supports it. Otherwise leave the task blocked and
+    use `note` to state the specific clarification needed from the user.
+6. Keep at most one task `in_progress`; all other unfinished tasks are
+    `pending`. Mark a task `completed` only when the assigned agent's latest
+    report provides evidence that its deliverable was produced. Mark a task
+    `blocked` only for a real dependency, missing data/access, disabled worker,
+    unsupported capability, or unresolved material ambiguity, and state why.
+7. Set `next` to the enabled owner of the sole `in_progress` task. Set `next`
+    to `end` only when all work is completed, or no remaining work can proceed
+    and the blockers/needed user input are clearly stated in `note`.
+
+## Output discipline
+Return a coherent full todo, not a new plan that forgets prior progress. Keep
+`note` concise and factual: summarize the routing decision, completed evidence,
+or the exact blocker/question. Never treat a request to do work as evidence
+that the work was done.
 """
 
 
-# llm = ChatAnthropic(model="claude-sonnet-4-5")
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-coordinator_llm = create_agent(
-    model=llm,
-    system_prompt=COORDINATOR_PROMPT,
-    response_format=TodoUpdate,
-)
-
-
-def master_coordinator(state: GraphState) -> Command:
+def master_coordinator(state: GraphState, config: RunnableConfig) -> Command:
     """Coordinator node: updates the shared todo list, judges what's actually
     done, and routes to whichever agent owns the next in-progress task."""
+    configurable = config.get("configurable", {})
+    fleet_id = configurable.get("fleet_id")
+    configs = {
+        "Data Analyst": get_agent_config("analyst", fleet_id),
+        "Narrator": get_agent_config("narrator", fleet_id),
+    }
+    enabled_workers = [name for name, config in configs.items() if config.enabled]
+    coordinator_config = get_agent_config("coordinator", fleet_id)
+    coordinator_llm = create_agent(
+        model=create_chat_model(configurable.get("model_settings")),
+        system_prompt=COORDINATOR_PROMPT,
+        response_format=TodoUpdate,
+    )
     result = coordinator_llm.invoke(
         {"messages": [*state["messages"],
-         ("system", f"Current todo: {state.get('todo', [])}")
+         ("system", f"Current todo: {state.get('todo', [])}\n"
+                     f"Selected SQL sources: {state.get('selected_sources', [])}\n"
+                     f"Enabled worker agents: {enabled_workers}. Do not assign tasks to disabled agents.\n"
+                     f"Coordinator instructions: {coordinator_config.instructions}")
         ]}
     )
     last_msg = result["messages"][-1]
     content = last_msg.content
     decision = TodoUpdate(**content) if isinstance(content, dict) else TodoUpdate.model_validate_json(content)
 
-    goto = END if decision.next == "end" else decision.next
+    todo = decision.todo
+    note = decision.note
+    if decision.next == "end":
+        goto = END
+    elif not configs[decision.next].enabled:
+        todo = [
+            {**task, "status": "blocked"}
+            if task["assigned_to"] == decision.next and task["status"] == "in_progress"
+            else task
+            for task in decision.todo
+        ]
+        note = f"{note}\nTask blocked: {decision.next} is disabled in Agent Fleet settings."
+        goto = END
+    else:
+        goto = decision.next
     return Command(
         goto=goto,
         update={
-            "todo": decision.todo,
-            "messages": [AIMessage(content=decision.note)],
+            "todo": todo,
+            "messages": [AIMessage(content=note)],
         },
     )
 

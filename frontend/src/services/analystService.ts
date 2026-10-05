@@ -1,5 +1,5 @@
 import { API_BASE_URL } from '@/lib/apiEndpoints';
-import type { AnalystState, AnalystStreamEvent } from './types';
+import type { AnalystState, AgentEvent } from './types';
 
 const WS_BASE_URL = API_BASE_URL.replace(/^http/, 'ws');
 
@@ -19,28 +19,52 @@ export async function closeAnalystSession(sessionId: string): Promise<void> {
   await fetch(`${API_BASE_URL}/analyst/sessions/${sessionId}`, { method: 'DELETE' });
 }
 
+export interface SelectedAnalystSource {
+  schema_id: string;
+  tables: string[];
+}
+
+export interface AnalystChatRequest {
+  selectedSources: SelectedAnalystSource[];
+  fleetId?: string;
+  modelSettings: { provider: string; model: string; api_key: string };
+}
+
+export interface AnalystStreamControl {
+  close: () => void;
+  interrupt: () => void;
+}
+
 /**
  * Open a WebSocket to the LangGraph streaming endpoint and stream events.
  * Returns a cleanup function that closes the socket.
  *
  * @param sessionId  - thread_id for LangGraph checkpointer
  * @param message    - user message to send
- * @param onEvent    - called for every streamed event (token, node_start, tool_start, tool_end, done, error)
+ * @param onEvent    - called for every streamed event
  */
 export function streamAnalystMessage(
   sessionId: string,
   message: string,
-  onEvent: (event: AnalystStreamEvent) => void
-): () => void {
+  request: AnalystChatRequest,
+  onEvent: (event: AgentEvent) => void
+): AnalystStreamControl {
   const ws = new WebSocket(`${WS_BASE_URL}/analyst/sessions/${sessionId}/ws`);
+  let interruptRequested = false;
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({ message }));
+    ws.send(JSON.stringify({
+      message,
+      selected_sources: request.selectedSources,
+      fleet_id: request.fleetId,
+      model_settings: request.modelSettings,
+    }));
+    if (interruptRequested) ws.send(JSON.stringify({ type: 'interrupt' }));
   };
 
   ws.onmessage = (e) => {
     try {
-      const event: AnalystStreamEvent = JSON.parse(e.data);
+      const event: AgentEvent = JSON.parse(e.data);
       onEvent(event);
     } catch {
       // ignore malformed frames
@@ -48,8 +72,17 @@ export function streamAnalystMessage(
   };
 
   ws.onerror = () => {
-    onEvent({ type: 'error', error: 'WebSocket connection error' });
+    onEvent({ type: 'error', message: 'WebSocket connection error' });
   };
 
-  return () => ws.close();
+  return {
+    interrupt: () => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'interrupt' }));
+      } else if (ws.readyState === WebSocket.CONNECTING) {
+        interruptRequested = true;
+      }
+    },
+    close: () => ws.close(),
+  };
 }

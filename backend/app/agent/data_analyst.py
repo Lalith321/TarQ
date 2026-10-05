@@ -10,9 +10,10 @@ import json
 import os
 from pathlib import Path
 from typing import Dict, Any, List
-from langchain_anthropic import ChatAnthropic
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAI
-from langchain_core.messages import HumanMessage, ToolMessage
+from urllib.parse import quote_plus
+from sqlalchemy import create_engine
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from deepagents import create_deep_agent
@@ -23,21 +24,55 @@ from .sandbox import SandboxBackendFactory
 from ..tools.dashboard_tool import dashboard_tool
 from ..tools.run_python_sandbox_tool import create_run_python_sandbox_tool
 from ..tools.sql_tool import create_sql_tools
+from ..services.dashboard_service import dashboard_service
+from ..routers.agent_configs import get_agent_config
+from ..llm_config import create_chat_model
+from ..core.workspace_paths import workspace_dir
 
 # 2. Agent System Prompt with Sandbox & Artifact Guidelines
 DATA_ANALYST_PROMPT = """You are the Data Analyst.
-You handle technical data extraction, pandas analysis, and visualization as directed by the Master Coordinator.
+You are responsible for evidence-based data discovery, SQL retrieval, analysis,
+and dashboard/widget artifacts assigned by the Master Coordinator. Follow the
+active task and the user's stated scope; do not take over presentation/video
+work assigned to the Narrator.
 
-Tools & Execution Rules:
-1. SQL Database Tools:
-   - Execute `query_sql_database_tool` to run queries. Full outputs automatically export to CSV in the sandbox scratch directory, returning preview metadata to you.
-2. Sandbox Tools (`run_python_sandbox`):
-   - Perform stateful pandas manipulations, data cleaning, or statistical calculations directly on generated CSVs inside `/workspace` or `sandbox_data/`.
-3. Visualization Tools:
-   - `create_widget`: Use for single charts/metrics.
-   - `create_dashboard`: Use ONLY when instructed to build a full dashboard. Every widget passed must reference its source SQL query.
+## Sources and tools
+- Use only the selected databases and tables supplied in the task context.
+    Treat that context as an allowlist; do not assume access to other sources.
+- Inspect the available schema/listing tools when needed, then query only the
+    columns and rows required for the task. SQL tool names may be source-prefixed.
+- Use the stateful `run_python_sandbox` tool for reproducible pandas work,
+    cleaning, statistical calculations, and checks on tool-provided data/files.
+- Use the registered `dashboard_tool` to create a single widget or dashboard.
+    Supply correct field names and widget types. For widgets intended to update
+    with their source, include the selected source's `schema_id`, a reusable
+    SELECT query, and bound `sql_params`; use `data` only as a chat preview.
+    Set the standalone flag for a single chat widget; use a full dashboard
+    only when the task asks for one.
+- Use only paths returned by tools or paths explicitly available in the
+    sandbox context. Do not claim a file or dashboard was saved unless the tool
+    confirms it.
 
-Never fabricate data. Always run SQL or Python code to compute figures before returning results.
+## Analysis standards
+- Never fabricate observations, data, labels, statistics, or conclusions. A
+    synthetic example is allowed only when the user explicitly requests sample
+    data; label it clearly as synthetic and never present it as actual results.
+- Compute every reported figure from retrieved data or reproducible code.
+    Check row counts, nulls, units, date ranges, aggregation level, and relevant
+    denominator before interpreting results. Avoid unsupported causal claims.
+- Preserve the user's filters, time window, grouping, and definitions. If a
+    material detail is missing and cannot be resolved from the schema or
+    conversation, do not guess: report the exact blocker or clarification needed.
+- Keep queries read-only and bounded to the task. Do not expose credentials or
+    unrelated sensitive row-level data in the final response or artifacts.
+- If data is empty, incomplete, contradictory, or unavailable, say so and
+    describe its effect. Do not replace missing results with plausible values.
+
+## Completion report
+Return a concise, auditable summary of what was done, the key results and their
+definitions, the data scope used, caveats, and any created artifact name/path.
+Distinguish measured facts from interpretation. Explicitly report blockers; do
+not claim completion when a required computation or artifact failed.
 """
 
 
@@ -54,7 +89,8 @@ def _extract_artifacts_from_tool_messages(messages: List[Any]) -> Dict[str, str]
             continue
 
         # Extract SQL exported CSVs
-        if msg.name == "query_sql_database_tool":
+        tool_name = msg.name or ""
+        if tool_name.endswith("query_sql_database_tool"):
             try:
                 payload = json.loads(msg.content)
                 if payload.get("status") == "success" and "file_path" in payload:
@@ -64,10 +100,12 @@ def _extract_artifacts_from_tool_messages(messages: List[Any]) -> Dict[str, str]
                 pass
 
         # Extract Dashboard JSON artifacts
-        elif msg.name == "create_dashboard":
+        elif tool_name in {"dashboard_tool", "create_dashboard"}:
             artifact = getattr(msg, "artifact", None)
             if isinstance(artifact, dict) and "id" in artifact:
-                new_artifacts[f"dashboard_{artifact['id']}"] = artifact.get("path", "")
+                artifact_path = artifact.get("artifact_path") or artifact.get("path")
+                if artifact_path:
+                    new_artifacts[f"dashboard_{artifact['id']}"] = artifact_path
             else:
                 try:
                     payload = json.loads(msg.content)
@@ -82,15 +120,13 @@ def _extract_artifacts_from_tool_messages(messages: List[Any]) -> Dict[str, str]
 
 # 4. Instantiate Tools and Deep Agent
 _backend_dir = Path(__file__).resolve().parents[2]
-_financials_db = _backend_dir / "data" / "financials.db"
-_financials_db.parent.mkdir(parents=True, exist_ok=True)
-sql_toolset = create_sql_tools(db_path=str(_financials_db), sandbox_dir=str(_backend_dir / "sandbox_data"))
+_sandbox_dir = workspace_dir() / "analyst_sandbox"
 
 # Use the same backend interface as the Narrator. Subprocess is a deliberate
 # local-development default; deployed environments select SANDBOX_BACKEND.
 _sandbox_backend_name = os.getenv("SANDBOX_BACKEND", "subprocess")
 _sandbox_backend_kwargs = (
-    {"workspace": str(_backend_dir / "sandbox_data")}
+    {"workspace": str(_sandbox_dir)}
     if _sandbox_backend_name == "subprocess"
     else {}
 )
@@ -99,23 +135,30 @@ _sandbox_backend = SandboxBackendFactory.create(
 ).start()
 sandbox_toolset = [create_run_python_sandbox_tool(_sandbox_backend)]
 
-all_analyst_tools = [
-    *sql_toolset,
-    *sandbox_toolset,
-    dashboard_tool,
-]
+def _create_schema_engine(schema, password: str):
+    metadata = schema.metadata
+    db_type = str(metadata.get("dbType", "PostgreSQL")).strip().lower()
+    if db_type not in {"postgresql", "postgres", "pg"}:
+        raise ValueError(f"Unsupported database type for schema '{schema.name}'")
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+    username = quote_plus(str(metadata.get("username", "")).strip())
+    encoded_password = quote_plus(password)
+    host = str(metadata.get("host", "")).strip()
+    port = str(metadata.get("port", "5432")).strip() or "5432"
+    database = str(metadata.get("database", "")).strip()
+    if not host or not database:
+        raise ValueError(f"Connection details for schema '{schema.name}' are incomplete")
 
-data_analyst_agent = create_deep_agent(name="Data Analyst",
-    model=llm,
-    tools=all_analyst_tools,
-    system_prompt=DATA_ANALYST_PROMPT,
-)
+    sslmode = "require" if metadata.get("ssl") else "prefer"
+    url = (
+        f"postgresql+psycopg://{username}:{encoded_password}@{host}:{port}/"
+        f"{database}?sslmode={sslmode}"
+    )
+    return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 10})
 
 
 # 5. LangGraph Node Function
-def data_analyst_node(state: GraphState) -> Command:
+def data_analyst_node(state: GraphState, config: RunnableConfig) -> Command:
     """
     Data Analyst Execution Node:
     - Resolves active task or current_task from GraphState.
@@ -130,25 +173,84 @@ def data_analyst_node(state: GraphState) -> Command:
         task_desc = current_todo["description"] if current_todo else "Execute data analysis task."
 
     existing_artifacts = state.get("artifacts", {})
+    configurable = config.get("configurable", {})
+    fleet_id = configurable.get("fleet_id")
+    selected_sources = state.get("selected_sources", [])
+    sql_tools = []
+    engines = []
+    source_context = []
+
+    for index, selection in enumerate(selected_sources):
+        schema_id = selection["schema_id"]
+        schema = dashboard_service.get_schema(schema_id)
+        password = dashboard_service.get_schema_password(schema_id)
+        if schema is None or password is None:
+            raise ValueError(f"Selected schema '{schema_id}' is no longer available")
+
+        selected_tables = selection["tables"]
+        source_context.append({"schema_id": schema.id, "database": schema.name, "tables": selected_tables})
+        if not selected_tables:
+            continue
+
+        engine = _create_schema_engine(schema, password)
+        engines.append(engine)
+        tables_by_schema: dict[str | None, list[str]] = {}
+        for table_name in selected_tables:
+            if "." in table_name:
+                table_schema, bare_table_name = table_name.split(".", 1)
+            else:
+                table_schema, bare_table_name = None, table_name
+            tables_by_schema.setdefault(table_schema, []).append(bare_table_name)
+
+        for schema_index, (table_schema, table_names) in enumerate(tables_by_schema.items()):
+            scope_name = table_schema or "default"
+            sql_tools.extend(
+                create_sql_tools(
+                    engine=engine,
+                    include_tables=table_names,
+                    schema=table_schema,
+                    sandbox_dir=str(_sandbox_dir),
+                    sandbox_backend=_sandbox_backend,
+                    tool_name_prefix=f"source_{index + 1}_{scope_name}_{schema_index + 1}",
+                )
+            )
+
+    data_analyst_agent = create_deep_agent(
+        name="Data Analyst",
+        model=create_chat_model(configurable.get("model_settings")),
+        tools=[*sql_tools, *sandbox_toolset, dashboard_tool],
+        system_prompt=(
+            f"{DATA_ANALYST_PROMPT}\n\n"
+            f"Additional configured instructions: {get_agent_config('analyst', fleet_id).instructions}"
+        ),
+    )
 
     # Construct context task message
     task_prompt = (
         f"Active Task: {task_desc}\n"
         f"User Instructions: {state.get('messages', [])[-1]}\n"
+        f"Selected SQL databases and tables: {json.dumps(source_context, indent=2)}\n"
         f"Available Host/Sandbox Artifacts: {json.dumps(existing_artifacts, indent=2)}"
     )
 
     # Run agent execution
-    result = data_analyst_agent.invoke({"messages": [HumanMessage(content=task_prompt)]})
+    try:
+        result = data_analyst_agent.invoke({"messages": [HumanMessage(content=task_prompt)]})
+    finally:
+        for engine in engines:
+            engine.dispose()
 
     # Extract new artifacts and update dictionary
     discovered_artifacts = _extract_artifacts_from_tool_messages(result["messages"])
     updated_artifacts = {**existing_artifacts, **discovered_artifacts}
+    analyst_report = result["messages"][-1]
+    if isinstance(analyst_report, AIMessage):
+        analyst_report = analyst_report.model_copy(update={"name": "Data Analyst"})
 
     return Command(
         goto="Master Coordinator",
         update={
-            "messages": [result["messages"][-1]],
+            "messages": [analyst_report],
             "artifacts": updated_artifacts,
         },
     )

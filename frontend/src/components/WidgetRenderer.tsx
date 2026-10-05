@@ -36,33 +36,65 @@ function SimpleBarChart({ series, labels }: { series?: any[]; labels?: string[] 
 
 function SimpleLineChart({ series }: { series?: any[] }) {
   if (!series?.[0]?.data?.length) return null;
-  const data = series[0].data;
-  const max = Math.max(...data.map((d: any) => d.y));
-  const min = Math.min(...data.map((d: any) => d.y));
+  const dataLength = Math.max(...series.map((item) => item.data?.length ?? 0));
+  const values = series.flatMap((item) => item.data.map((point: any) => point.y))
+    .filter((value: unknown): value is number => typeof value === 'number' && Number.isFinite(value));
+  if (!values.length) return null;
+  const max = Math.max(...values);
+  const min = Math.min(...values);
   const range = max - min || 1;
-  const points = data
-    .map((d: any, i: number) => {
-      const x = (i / (data.length - 1)) * 100;
-      const y = 100 - ((d.y - min) / range) * 100;
-      return `${x},${y}`;
-    })
-    .join(' ');
+  const palette = ['#2563eb', '#e11d48', '#059669', '#d97706', '#7c3aed', '#0891b2'];
 
   return (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
-      <polyline
-        fill="none"
-        stroke="#6366f1"
-        strokeWidth="2"
-        points={points}
-        vectorEffect="non-scaling-stroke"
-      />
-      {data.map((d: any, i: number) => {
-        const x = (i / (data.length - 1)) * 100;
-        const y = 100 - ((d.y - min) / range) * 100;
-        return <circle key={i} cx={x} cy={y} r="1.5" fill="#6366f1" />;
-      })}
-    </svg>
+    <div className="flex h-full min-h-[180px] flex-col">
+      <svg viewBox="0 0 120 100" preserveAspectRatio="none" className="min-h-0 w-full flex-1">
+        {[0, 25, 50, 75, 100].map((y) => (
+          <g key={y}>
+            <line x1="25" x2="118" y1={4 + (y / 100) * 92} y2={4 + (y / 100) * 92} stroke="#e5e7eb" strokeDasharray="2 2" />
+            <text x="22" y={Math.max(4, 3 + (y / 100) * 92)} textAnchor="end" fontSize="3" fill="#6b7280">
+              {(max - (y / 100) * range).toLocaleString()}
+            </text>
+          </g>
+        ))}
+        {series.map((item, seriesIndex) => {
+          const segments: string[][] = [[]];
+          const itemData = item.data ?? [];
+          itemData.forEach((point: any, index: number) => {
+            if (typeof point.y !== 'number' || !Number.isFinite(point.y)) {
+              if (segments[segments.length - 1].length) segments.push([]);
+              return;
+            }
+            const x = dataLength <= 1 ? 71.5 : 25 + (index / (dataLength - 1)) * 93;
+            const y = 96 - ((point.y - min) / range) * 92;
+            segments[segments.length - 1].push(`${x},${y}`);
+          });
+          const color = palette[seriesIndex % palette.length];
+          return (
+            <g key={item.name}>
+              {segments.filter((segment) => segment.length).map((segment, index) => (
+                <polyline key={index} fill="none" stroke={color} strokeWidth="2" points={segment.join(' ')} vectorEffect="non-scaling-stroke" />
+              ))}
+              {itemData.map((point: any, index: number) => {
+                if (typeof point.y !== 'number' || !Number.isFinite(point.y)) return null;
+                const x = dataLength <= 1 ? 71.5 : 25 + (index / (dataLength - 1)) * 93;
+                const y = 96 - ((point.y - min) / range) * 92;
+                return <circle key={index} cx={x} cy={y} r="1.5" fill={color} />;
+              })}
+            </g>
+          );
+        })}
+      </svg>
+      {series.length > 1 && (
+        <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 pt-2 text-[10px] text-gray-600">
+          {series.map((item, index) => (
+            <span key={item.name} className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: palette[index % palette.length] }} />
+              {item.name}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -201,6 +233,7 @@ export function WidgetRenderer({ widget, onDrillDown, className = '' }: Props) {
       case 'bar':
         return <SimpleBarChart series={widget.series} labels={widget.labels} />;
       case 'line':
+      case 'multi_line':
         return <SimpleLineChart series={widget.series} />;
       case 'area':
         return <SimpleAreaChart series={widget.series} />;

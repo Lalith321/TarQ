@@ -2,21 +2,20 @@ import React from 'react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import WidgetCard from './WidgetCard';
 import type { WidgetSpec } from '@/services/types';
+import type { WidgetActions } from './WidgetRenderer';
 
 interface Props {
   widget: WidgetSpec;
   onRowClick?: (row: Record<string, any>) => void;
+  actions?: WidgetActions;
 }
 
-/** Columns are derived from the data itself — this widget makes no
- * assumption about what fields exist, which is what lets it double as the
- * generic drill-down result renderer. */
-export default function TableWidget({ widget, onRowClick }: Props) {
+export default function TableWidget({ widget, onRowClick, actions }: Props) {
   const columns = widget.data.length > 0 ? Object.keys(widget.data[0]) : [];
   const clickable = Boolean(widget.drill_down?.enabled && onRowClick);
 
   return (
-    <WidgetCard widget={widget}>
+    <WidgetCard widget={widget} {...actions}>
       <div className="overflow-auto h-full custom-scrollbar">
         <Table>
           <TableHeader>

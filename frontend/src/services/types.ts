@@ -4,7 +4,7 @@
 // backend's Pydantic-to-OpenAPI-to-TS pipeline in this pass).
 import * as THREE from 'three';
 
-export type WidgetType = 'bar' | 'line' | 'pie' | 'area' | 'table' | 'stat' | 'gis';
+export type WidgetType = 'bar' | 'line' | 'multi_line' | 'pie' | 'area' | 'table' | 'stat' | 'gis';
 
 export type GisGeometry = 'point' | 'heatmap' | 'choropleth';
 
@@ -34,6 +34,18 @@ export interface WidgetPosition {
   h: number;
 }
 
+export interface CanvasPoint {
+  x: number;
+  y: number;
+}
+
+export interface CanvasStroke {
+  tool: 'pen' | 'brush' | 'marker' | 'eraser';
+  color: string;
+  size: number;
+  points: CanvasPoint[];
+}
+
 export interface WidgetSpec {
   id: string;
   type: WidgetType;
@@ -45,6 +57,9 @@ export interface WidgetSpec {
   color?: string;
   gis?: GisConfig;
   drill_down?: DrillDownConfig;
+  sql_connection?: string;
+  sql_query?: string;
+  sql_params?: Record<string, any>;
   position: WidgetPosition;
 }
 
@@ -53,6 +68,7 @@ export interface DashboardSpec {
   title: string;
   description: string;
   widgets: WidgetSpec[];
+  drawings: CanvasStroke[];
   updated_at: string;
 }
 
@@ -127,13 +143,17 @@ export interface AnalystState {
 }
 
 // Streaming event types received over WebSocket
-export type AnalystStreamEvent =
-  | { type: 'token'; node: string; content: string }
-  | { type: 'node_start'; node: string }
-  | { type: 'tool_start'; tool: string; input: any }
-  | { type: 'tool_end'; tool: string; output: string }
-  | { type: 'done' }
-  | { type: 'error'; error: string };
+export type AgentEvent =
+  | { type: 'message_delta'; content: string }
+  | { type: 'tool_started'; tool: string; toolCallId: string }
+  | { type: 'tool_finished'; toolCallId: string }
+  | { type: 'widget_created'; widgetId: string; widget: WidgetSpec }
+  | { type: 'final'; content: string }
+  | { type: 'interrupted' }
+  | { type: 'error'; message: string };
+
+/** @deprecated use AgentEvent */
+export type AnalystStreamEvent = AgentEvent;
 
 
 

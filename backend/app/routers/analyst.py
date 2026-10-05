@@ -1,22 +1,19 @@
 from __future__ import annotations
 
 import shutil
-import tempfile
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
 
-try:
-    from app.agent.coordinator import DeepDataAnalystAgent
-except ModuleNotFoundError:  # pragma: no cover - fallback for repo-root imports
-    from backend.app.agent.coordinator import DeepDataAnalystAgent
+from app.agent.coordinator import DeepDataAnalystAgent
+from app.core.workspace_paths import workspace_dir
 
 router = APIRouter(prefix="/analyst", tags=["analyst"])
 
-_UPLOAD_DIR = Path(tempfile.gettempdir()) / "dashboard_platform_analyst_uploads"
-_UPLOAD_DIR.mkdir(exist_ok=True)
+_UPLOAD_DIR = workspace_dir() / "uploads" / "analyst"
+_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # In-memory session store — one Sandbox worker process per session. No auth
 # concept, matching the rest of this build; sessions are just opaque ids.

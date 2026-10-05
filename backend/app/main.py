@@ -25,7 +25,7 @@ from app.models.schemas import (
     DashboardSpec, WidgetSpec, WidgetType, WidgetPosition,
     GisConfig, GisGeometry, DrillDownConfig,
 )
-from app.routers import dashboard, documents, context, ml
+from app.routers import agent_configs, analyst, artifacts, dashboard, documents, context, ml, schema, logs
 from app.services.dashboard_service import dashboard_service
 
 @asynccontextmanager
@@ -54,10 +54,15 @@ app.add_middleware(
 )
 
 app.include_router(chat.router)
+app.include_router(analyst.router)
+app.include_router(agent_configs.router)
 app.include_router(dashboard.router)
+app.include_router(artifacts.router)
 app.include_router(documents.router)
 app.include_router(context.router)
 app.include_router(ml.router)
+app.include_router(schema.router)
+app.include_router(logs.router)
 
 
 @app.get("/health")

@@ -1,7 +1,89 @@
-from typing import Annotated, Any, List, Union
+import base64
+import hashlib
+import io
+import json
+import logging
+import os
+import re
+import textwrap
+import threading
+import time
+import urllib.error
+import urllib.request
+import wave
+from typing import Annotated, Any, Callable, List, Union
 from langchain_core.tools import tool
 
 from app.agent.sandbox import ExecutionResult, SandboxBackend, SandboxBackendFactory
+
+GEMINI_TTS_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
+GEMINI_TTS_MODEL = "gemini-3.8-flash-tts"
+MAX_VOICEOVER_CHARACTERS = 10_000
+GEMINI_TTS_VOICES = {
+    "Achernar", "Achird", "Algenib", "Algieba", "Alnilam", "Aoede", "Autonoe",
+    "Callirrhoe", "Charon", "Despina", "Enceladus", "Erinome", "Fenrir", "Gacrux",
+    "Iapetus", "Kore", "Laomedeia", "Leda", "Orus", "Puck", "Pulcherrima",
+    "Rasalgethi", "Sadachbia", "Sadaltager", "Schedar", "Sulafat", "Umbriel",
+    "Vindemiatrix", "Zephyr", "Zubenelgenubi",
+}
+GEMINI_VOICE_ALIASES = {
+    "en-us-standard-d": "Charon",
+    "en-us-standard-c": "Kore",
+    "en-us-standard-a": "Puck",
+    "en-us-standard-b": "Aoede",
+}
+logger = logging.getLogger(__name__)
+
+
+def _normalize_gemini_voice(voice_name: str) -> str:
+    requested = voice_name.strip()
+    if requested in GEMINI_TTS_VOICES:
+        return requested
+    alias = GEMINI_VOICE_ALIASES.get(requested.lower())
+    if alias:
+        return alias
+    return "Kore"
+
+
+def _extract_tts_audio(response: dict[str, Any]) -> bytes:
+    output_audio = response.get("output_audio")
+    if isinstance(output_audio, dict) and isinstance(output_audio.get("data"), str):
+        return base64.b64decode(output_audio["data"], validate=True)
+
+    for step in response.get("steps", []):
+        for content in step.get("content", []):
+            if content.get("type") == "audio" and isinstance(content.get("data"), str):
+                return base64.b64decode(content["data"], validate=True)
+
+    raise ValueError("Gemini TTS response did not contain audio data")
+
+
+def _request_tts_audio(script: str, voice_name: str, style: str, api_key: str) -> bytes:
+    text_part: dict[str, Any] = {"type": "text", "text": script}
+    if style.strip():
+        text_part["annotations"] = [{"type": "speech_metadata", "style": style.strip()}]
+
+    body = {
+        "model": GEMINI_TTS_MODEL,
+        "input": [{"type": "user_input", "content": [text_part]}],
+        "response_format": {"type": "audio"},
+        "generation_config": {"speech_config": [{"voice": voice_name}]},
+    }
+    request = urllib.request.Request(
+        GEMINI_TTS_ENDPOINT,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=180) as result:
+            return _extract_tts_audio(json.loads(result.read()))
+    except urllib.error.HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")[:1000]
+        raise RuntimeError(f"Gemini TTS request failed (HTTP {error.code}): {details}") from None
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"Gemini TTS request failed: {error.reason}") from None
 
 
 def _get_result_content(result: ExecutionResult) -> str:
@@ -32,6 +114,8 @@ def create_narrator_tools(
     backend: Union[str, SandboxBackend] = "docker",
     remotion_dir: str = "/workspace/remotion_app",
     artifact_dir: str = "/workspace/artifacts",
+    artifact_registry: dict[str, str] | None = None,
+    artifact_reader: Callable[[str], Any] | None = None,
     **backend_kwargs: Any,
 ) -> List[Any]:
     """Factory creating Narrator tools bound to a specific SandboxBackend instance.
@@ -47,6 +131,58 @@ def create_narrator_tools(
         sandbox = SandboxBackendFactory.create(backend, **backend_kwargs).start()
     else:
         sandbox = backend
+    artifact_registry = artifact_registry or {}
+
+    def ensure_remotion_project() -> None:
+        package_path = f"{remotion_dir.rstrip('/')}/package.json"
+        package_result = sandbox.read_file(package_path)
+        if _is_success(package_result):
+            try:
+                package = json.loads(_get_result_content(package_result))
+            except json.JSONDecodeError:
+                package = {}
+        else:
+            package = {}
+        dependencies = package.setdefault("dependencies", {})
+        required_dependencies = {
+            "@remotion/cli": "^4.0.0",
+            "react": "^18.2.0",
+            "react-dom": "^18.2.0",
+            "remotion": "^4.0.0",
+        }
+        needs_manifest_update = any(
+            dependencies.get(name) != version
+            for name, version in required_dependencies.items()
+        )
+        dependencies.update(required_dependencies)
+        if not _is_success(package_result) or needs_manifest_update:
+            package.setdefault("name", "tarq-generated-video")
+            package.setdefault("private", True)
+            package.setdefault("scripts", {"render": "remotion render"})
+            sandbox.write_file(package_path, json.dumps(package, indent=2))
+
+        entry_names = ("index.tsx", "index.jsx", "index.ts", "index.js")
+        has_entrypoint = any(
+            _is_success(sandbox.read_file(f"{remotion_dir.rstrip('/')}/src/{name}"))
+            for name in entry_names
+        )
+        if not has_entrypoint:
+            entry_path = f"{remotion_dir.rstrip('/')}/src/index.tsx"
+            sandbox.write_file(entry_path, """import React from 'react';
+import { Composition, registerRoot } from 'remotion';
+
+const Placeholder: React.FC = () => (
+  <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#10131a', color: '#f4f5f7', fontSize: 64 }}>
+    Replace this scene with the requested video.
+  </div>
+);
+
+const Root: React.FC = () => (
+  <Composition id="Main" component={Placeholder} durationInFrames={150} fps={30} width={1920} height={1080} />
+);
+
+registerRoot(Root);
+""")
 
     @tool
     def list_artifacts() -> str:
@@ -56,6 +192,11 @@ def create_narrator_tools(
         can determine which artifacts are relevant to the current presentation.
         """
         manifest_path = f"{artifact_dir.rstrip('/')}/MANIFEST.json"
+
+        if artifact_registry:
+            manifest_res = sandbox.read_file(manifest_path)
+            manifest = _get_result_content(manifest_res) if _is_success(manifest_res) else None
+            return json.dumps({"analysis_artifacts": artifact_registry, "sandbox_manifest": manifest})
         
         # Try reading MANIFEST.json first
         manifest_res = sandbox.read_file(manifest_path)
@@ -79,12 +220,75 @@ def create_narrator_tools(
         Artifacts may contain widget definitions, materialized data, analysis
         results, narrative information, or other presentation inputs.
         """
+        if path in artifact_registry.values():
+            if os.path.isfile(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as artifact_file:
+                        return artifact_file.read()
+                except (OSError, UnicodeError) as error:
+                    return json.dumps({"error": f"Failed to read {path}: {error}"})
+            if artifact_reader is not None:
+                try:
+                    source_result = artifact_reader(path)
+                    if _is_success(source_result):
+                        return _get_result_content(source_result)
+                except Exception as error:
+                    return json.dumps({"error": f"Failed to read {path}: {error}"})
+
         res = sandbox.read_file(path)
         if _is_success(res):
             return _get_result_content(res)
         
         err = getattr(res, "stderr", None) or getattr(res, "error", f"Failed to read {path}")
         return json.dumps({"error": str(err)})
+
+    @tool
+    def generate_voiceover(
+        script: Annotated[str, "The exact spoken narration to synthesize."],
+        voice_name: Annotated[str, "Gemini TTS prebuilt voice name."] = "Kore",
+        style: Annotated[str, "Short delivery direction, such as calm and informative."] = "",
+    ) -> str:
+        """Generate narration audio and save it where the Remotion composition can load it."""
+        clean_script = script.strip()
+        if not clean_script:
+            return json.dumps({"status": "error", "error": "The narration script cannot be empty."})
+        if len(clean_script) > MAX_VOICEOVER_CHARACTERS:
+            return json.dumps({
+                "status": "error",
+                "error": f"Narration exceeds the {MAX_VOICEOVER_CHARACTERS}-character limit.",
+            })
+
+        api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            return json.dumps({
+                "status": "error",
+                "error": "Set GOOGLE_API_KEY to enable Gemini voiceover generation.",
+            })
+
+        try:
+            provider_voice = _normalize_gemini_voice(voice_name)
+            audio = _request_tts_audio(clean_script, provider_voice, style, api_key)
+            with wave.open(io.BytesIO(audio), "rb") as wav_file:
+                duration_seconds = wav_file.getnframes() / wav_file.getframerate()
+        except (RuntimeError, ValueError, wave.Error, ZeroDivisionError) as error:
+            return json.dumps({"status": "error", "error": str(error)})
+
+        digest = hashlib.sha256(
+            f"{clean_script}\0{provider_voice}\0{style}".encode("utf-8")
+        ).hexdigest()[:16]
+        relative_path = f"audio/voiceover_{digest}.wav"
+        full_path = f"{remotion_dir.rstrip('/')}/public/{relative_path}"
+        upload_result = sandbox.upload_file(full_path, audio)
+        if not _is_success(upload_result):
+            error = getattr(upload_result, "stderr", None) or getattr(upload_result, "error", "Upload failed")
+            return json.dumps({"status": "error", "error": str(error)})
+
+        return json.dumps({
+            "status": "success",
+            "remotion_public_path": relative_path,
+            "duration_seconds": round(duration_seconds, 2),
+            "voice_name": provider_voice,
+        })
 
     @tool
     def execute_readonly_sql(
@@ -152,8 +356,24 @@ def create_narrator_tools(
         """Create or replace a Remotion TypeScript/TSX source file.
 
         Use the existing Remotion component library, animation primitives, and
-        design system whenever possible.
+        design system whenever possible. Use `.tsx` for source containing JSX
+        and `.ts` only for TypeScript without JSX.
         """
+        suffix = os.path.splitext(path)[1].lower()
+        if suffix not in {".ts", ".tsx", ".js", ".jsx"}:
+            return "Rejected source path: use a .ts, .tsx, .js, or .jsx extension."
+        jsx_opening_tag = re.search(
+            r"</[A-Za-z][\w.:-]*\s*>|<[A-Za-z][\w.:-]*\s+[^<>]*?/?>|<[A-Za-z][\w.:-]*\s*/>|<>|</>",
+            content,
+        )
+        if suffix in {".ts", ".js"} and jsx_opening_tag:
+            jsx_extension = ".tsx" if suffix == ".ts" else ".jsx"
+            return (
+                f"Rejected JSX in {suffix} source. Rename this file to "
+                f"{os.path.splitext(path)[0]}{jsx_extension} "
+                "and write it again. Use .tsx/.jsx whenever the source contains JSX."
+            )
+        ensure_remotion_project()
         full_path = (
             path
             if path.startswith(remotion_dir)
@@ -177,6 +397,7 @@ def create_narrator_tools(
 
         Use this before modifying existing compositions or reusable components.
         """
+        ensure_remotion_project()
         full_path = (
             path
             if path.startswith(remotion_dir)
@@ -209,16 +430,52 @@ def create_narrator_tools(
             if output_path.startswith(artifact_dir)
             else f"{artifact_dir.rstrip('/')}/{filename}"
         )
+        started_at = time.monotonic()
+        logger.info(
+            "Starting video render: composition=%s output=%s",
+            composition_id,
+            filename,
+        )
+        ensure_remotion_project()
+        logger.info("Remotion project prepared for composition=%s", composition_id)
 
         script = textwrap.dedent(f"""\
-            import subprocess, json
-            cmd = f"npx remotion render src/index.ts {composition_id!r} {target_path!r} --gl=angle"
-            res = subprocess.run(cmd, shell=True, cwd={remotion_dir!r}, capture_output=True, text=True)
+            import json, os, subprocess
+            from pathlib import Path
+
+            project = Path({remotion_dir!r})
+            output_path = Path({target_path!r})
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            if not (project / "node_modules" / ".bin" / "remotion").exists():
+                install = subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=project, capture_output=True, text=True)
+                if install.returncode != 0:
+                    print(json.dumps({{"status": "error", "logs": install.stderr or install.stdout}}))
+                    raise SystemExit(0)
+
+            entry = next((name for name in ("src/index.tsx", "src/index.jsx", "src/index.ts", "src/index.js") if (project / name).is_file()), None)
+            if entry is None:
+                print(json.dumps({{"status": "error", "error": "Remotion entrypoint missing; create src/index.ts with registerRoot and a Composition."}}))
+                raise SystemExit(0)
+
+            cmd = ["npx", "remotion", "render", entry, {composition_id!r}, str(output_path), "--concurrency=1"]
+            render_env = os.environ.copy()
+            render_env["NODE_OPTIONS"] = "--max-old-space-size=1024"
+            res = subprocess.run(cmd, cwd=project, capture_output=True, text=True, env=render_env)
             if res.returncode == 0:
+                manifest_path = Path({artifact_dir!r}) / "MANIFEST.json"
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    manifest = {{}}
+                manifest[output_path.name] = {{"type": "video/mp4", "path": str(output_path), "composition_id": {composition_id!r}, "size": output_path.stat().st_size}}
+                manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
                 print(json.dumps({{
                     "status": "success",
                     "composition_id": {composition_id!r},
-                    "artifact_path": {target_path!r}
+                    "artifact_path": str(output_path),
+                    "filename": output_path.name,
+                    "size": output_path.stat().st_size
                 }}))
             else:
                 print(json.dumps({{
@@ -227,16 +484,69 @@ def create_narrator_tools(
                 }}))
         """)
 
-        res = sandbox.execute_session(script)
+        stop_heartbeat = threading.Event()
+
+        def log_render_heartbeat() -> None:
+            while not stop_heartbeat.wait(30):
+                logger.info(
+                    "Video render still running: composition=%s elapsed_seconds=%.0f",
+                    composition_id,
+                    time.monotonic() - started_at,
+                )
+
+        heartbeat = threading.Thread(target=log_render_heartbeat, daemon=True)
+        heartbeat.start()
+        try:
+            res = sandbox.execute_session(script)
+        except Exception:
+            logger.exception(
+                "Video render execution failed: composition=%s elapsed_seconds=%.1f",
+                composition_id,
+                time.monotonic() - started_at,
+            )
+            raise
+        finally:
+            stop_heartbeat.set()
+            heartbeat.join()
+
         if _is_success(res):
-            return _get_result_content(res)
+            result_content = _get_result_content(res)
+            try:
+                result_payload = json.loads(result_content)
+            except (json.JSONDecodeError, TypeError):
+                result_payload = {}
+            if result_payload.get("status") == "success":
+                logger.info(
+                    "Video render completed: composition=%s output=%s elapsed_seconds=%.1f size_bytes=%s",
+                    composition_id,
+                    filename,
+                    time.monotonic() - started_at,
+                    result_payload.get("size"),
+                )
+            else:
+                logger.error(
+                    "Video render returned an error: composition=%s output=%s elapsed_seconds=%.1f details=%s",
+                    composition_id,
+                    filename,
+                    time.monotonic() - started_at,
+                    result_payload.get("error") or result_payload.get("logs") or result_content,
+                )
+            return result_content
 
         err = getattr(res, "stderr", None) or getattr(res, "error", "Render session execution failed")
+        logger.error(
+            "Video render failed: composition=%s output=%s elapsed_seconds=%.1f error=%s",
+            composition_id,
+            filename,
+            time.monotonic() - started_at,
+            err,
+        )
         return json.dumps({"status": "error", "error": str(err)})
 
     return [
         list_artifacts,
         read_artifact,
+        generate_voiceover,
         execute_readonly_sql,
         write_video_file,
         read_video_file,

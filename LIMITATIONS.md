@@ -12,6 +12,14 @@ place auth will eventually need to hook in is marked with a comment
 context-session logic assumes a user id, so adding auth later is additive,
 not a rewrite.
 
+## Saved SQL credentials
+SQL passwords are stored separately from schema metadata and encrypted at
+rest using `CREDENTIAL_ENCRYPTION_KEY`. If that variable is not configured,
+the key is derived from `DATABASE_URL` for local development; set an explicit,
+stable key in deployed environments and keep it backed up. Changing the key
+makes previously saved credentials unreadable, so those sources must be
+reconnected.
+
 ## GIS
 - **No map API key used on purpose** — tiles come from the public
   OpenStreetMap tile server. That's fine for development, but OSM's tile
@@ -34,17 +42,17 @@ not a rewrite.
   the properties in that GeoJSON.
 
 ## Drill-downs
-- **No SQL connections are actually wired up.** `ALLOWED_CONNECTIONS` in
-  `dashboard_service.py` is a name allowlist with nothing behind it —
-  `_execute_readonly` raises `NotImplementedError` on purpose instead of
-  faking rows, so a broken drill-down is visible (501) instead of silently
-  wrong. Wiring a connection means adding a real read-only SQLAlchemy engine
-  per name in `db/database.py` and replacing that one method.
-- Drill-down results are only as safe as the query template registered on
-  the widget — this design never lets a click supply raw SQL, only values
-  bound to a pre-written parameterized query, but it still means whoever
-  authors dashboards controls what a drill-down can expose. There's no
-  column-level permission model.
+- Dashboard and drill-down queries now resolve a saved PostgreSQL source by
+  `schema_id`, use its separately encrypted password, bind parameters, enforce
+  a PostgreSQL read-only transaction, set a 15-second statement timeout, and
+  return at most 5,000 rows. Query-backed widget result rows are not persisted;
+  opening or refreshing the dashboard executes the saved query again.
+- The app currently has no authentication or per-user source ownership. Until
+  that is added, do not expose the API to untrusted users: anyone who can reach
+  the dashboard endpoints may access registered sources through saved queries.
+- Read-only transactions prevent writes, but there is no column-level permission
+  model or query-plan cost limit. Use dedicated least-privilege database users,
+  and limit the tables they can read at the database level.
 
 ## Agentic context management
 - `ContextManager`'s summarizer defaults to a first-sentence extractive

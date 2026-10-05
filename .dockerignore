@@ -1,0 +1,16 @@
+.git
+.env
+**/.env
+.venv
+**/.venv
+node_modules
+**/node_modules
+workspace
+backend/sandbox
+backend/sandbox_data
+backend/sandbox_subprocess
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache

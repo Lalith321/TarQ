@@ -1,12 +1,12 @@
 import json
 import os
-import tempfile
 import uuid
 from typing import Annotated, Any
 from langchain_core.tools import tool
+from ..core.workspace_paths import workspace_dir
 
-# Standard scratch directory for dashboard payload artifacts
-_scratch_dir = tempfile.mkdtemp(prefix="dashboard_scratch_")
+_scratch_dir = str(workspace_dir() / "dashboard_scratch")
+os.makedirs(_scratch_dir, exist_ok=True)
 
 
 @tool(response_format="content_and_artifact")
@@ -19,10 +19,11 @@ def dashboard_tool(
             "- id: str (unique within the dashboard)\n"
             "- type: one of 'bar', 'stacked_bar', 'line', 'multi_line', 'pie', 'area', 'table', 'stat', 'gis'\n"
             "- title: str (widget heading)\n"
-            "- data: list[dict] (row objects containing the actual values to plot)\n"
+            "- data: optional list[dict] (row preview; live SQL-backed dashboards fetch current rows)\n"
             "- x_field: str (key in each data row for x-axis/category; omit for 'gis')\n"
             "- y_field: str | list[str] (key(s) in each data row for y-axis/values; omit for 'gis')\n"
             "- group_by: optional str (key used to split data into multiple series)\n"
+            "  For multi_line, use long-form rows: x_field is the category/date, group_by is the series label (for example company), and y_field is the numeric measure.\n"
             "- color: optional str (hex code or theme token for primary series)\n\n"
             "GIS Configuration (REQUIRED when type is 'gis'):\n"
             "  Object containing:\n"
@@ -45,8 +46,9 @@ def dashboard_tool(
             "  - result_widget_type: one of the type values above (default 'table')\n"
             "  - title_template: str (title template with placeholders, e.g. 'Runs for {agent_name}')\n\n"
             "Metadata & Refresh:\n"
-            "- sql_connection: optional str (exact connection name queried to build `data`)\n"
-            "- sql_query: optional str (exact read-only SELECT query used to build `data`)\n"
+            "- sql_connection: optional str (selected SQL source schema_id, as supplied in task context)\n"
+            "- sql_query: optional str (one reusable SELECT/WITH query; use :name placeholders)\n"
+            "- sql_params: optional object (values bound to the query placeholders)\n"
             "- position: optional object with x, y, w, h integers describing grid placement"
         ),
     ],
@@ -71,16 +73,18 @@ def dashboard_tool(
     Drill-down Guidance:
     - Add `drill_down` to any widget the user might reasonably want to click for deeper insight
       (e.g., clicking an agent on a cost chart to view that agent's individual runs).
-    - Only set `sql_connection` if you know an allowlisted connection exists server-side.
-      If unsure, omit `sql_connection`/`sql_query`—the drill-down will fall back to displaying
-      the clicked row's key fields.
+        - For live dashboard widgets, set `sql_connection` to a selected source `schema_id`
+            provided in the task context and supply a read-only `sql_query`. Never guess a source ID.
+            Use `sql_params` for bound values; never interpolate values into SQL text.
     - Drill-downs can nest: a drill-down result widget can itself declare a `drill_down`.
 
     Usage & Data Execution:
-    - Call this tool in the same turn whenever a user asks for a chart, graph, KPI, map, or dashboard.
-    - Never reply with text alone or ask clarifying questions first—make a reasonable choice and render.
-    - If no data is supplied, invent a small, plausible dataset. For GIS, use real, accurate coordinates.
-    - Put ALL data, labels, and layout in the tool call. Do not repeat raw data in your text response.
+    - Call this tool when a user asks for a chart, graph, KPI, map, or dashboard and verified data is available.
+    - If required data or a material definition is missing, do not invent values; report the blocker or ask for clarification.
+    - Use synthetic data only when the user explicitly requests a sample or demo, and label it clearly as synthetic. For GIS, use real, accurate coordinates.
+        - Put labels and layout in the tool call. Include source SQL for live dashboards; raw `data`
+            rows are appropriate for standalone chat previews or when no live source query is available.
+    - For grouped multi-line charts, return one row per x_field and group_by combination, aggregate the requested measure in SQL, set group_by to the company/category field, and set y_field to the numeric measure. The renderer creates one line per group.
     - Set `is_standalone_widget=True` when rendering a single chart in chat; set `False` for full dashboards.
     """
     dashboard_id = uuid.uuid4().hex

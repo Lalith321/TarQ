@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 class WidgetType(str, Enum):
     BAR = "bar"
     LINE = "line"
+    MULTI_LINE = "multi_line"
     PIE = "pie"
     AREA = "area"
     TABLE = "table"
@@ -51,9 +52,9 @@ class DrillDownConfig(BaseModel):
 
     sql_query is a template with named placeholders, e.g.
         "SELECT * FROM agent_runs WHERE agent_name = :agent_name LIMIT 200"
-    Only registered, read-only, allowlisted connections may be referenced by
-    sql_connection — see dashboard_service.ALLOWED_CONNECTIONS. This is a
-    stub in this build; see LIMITATIONS.md.
+    sql_connection references a saved SQL source by schema ID. The backend
+    resolves credentials from its encrypted credential store and executes the
+    query in a read-only transaction.
     """
     enabled: bool = True
     key_fields: list[str]                 # which fields from the clicked row to pass on
@@ -83,7 +84,20 @@ class WidgetSpec(BaseModel):
     drill_down: Optional[DrillDownConfig] = None
     sql_connection: Optional[str] = None
     sql_query: Optional[str] = None
+    sql_params: dict[str, Any] = Field(default_factory=dict)
     position: WidgetPosition
+
+
+class CanvasPoint(BaseModel):
+    x: float
+    y: float
+
+
+class CanvasStroke(BaseModel):
+    tool: Literal["pen", "brush", "marker", "eraser"]
+    color: str
+    size: float
+    points: list[CanvasPoint] = Field(default_factory=list)
 
 
 class DashboardSpec(BaseModel):
@@ -91,7 +105,45 @@ class DashboardSpec(BaseModel):
     title: str
     description: str = ""
     widgets: list[WidgetSpec] = Field(default_factory=list)
+    drawings: list[CanvasStroke] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class SchemaSourceType(str, Enum):
+    REMOTE_SQL = "remote_sql"
+    EXCEL = "excel"
+    DOCUMENT = "document"
+
+
+class SchemaStatus(str, Enum):
+    CONNECTED = "connected"
+    IMPORTING = "importing"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class SchemaColumn(BaseModel):
+    name: str
+    data_type: Optional[str] = None
+    selected: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SchemaTable(BaseModel):
+    name: str
+    columns: list[SchemaColumn] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SchemaConfig(BaseModel):
+    id: str
+    name: str
+    source_type: SchemaSourceType
+    status: SchemaStatus = SchemaStatus.FAILED
+    owner: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    tables: list[SchemaTable] = Field(default_factory=list)
 
 
 class DashboardUpdate(BaseModel):
@@ -100,6 +152,7 @@ class DashboardUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     widgets: Optional[list[WidgetSpec]] = None
+    drawings: Optional[list[CanvasStroke]] = None
 
 
 # ── Document insight extraction ────────────────────────────────────────────

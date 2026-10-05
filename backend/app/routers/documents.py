@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import tempfile
 import uuid
 from pathlib import Path
 
@@ -9,11 +8,12 @@ from fastapi import APIRouter, HTTPException, UploadFile
 
 from app.core.insight_extractor import DocumentInsightExtractor
 from app.models.schemas import InsightBundle
+from app.core.workspace_paths import workspace_dir
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-_UPLOAD_DIR = Path(tempfile.gettempdir()) / "dashboard_platform_uploads"
-_UPLOAD_DIR.mkdir(exist_ok=True)
+_UPLOAD_DIR = workspace_dir() / "uploads" / "documents"
+_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # In-memory cache of extraction results by upload id. Swap for a real table
 # once persistence is needed.

@@ -50,6 +50,15 @@ export async function fetchDrillDown(
   return res.json();
 }
 
+export async function fetchWidgetData(dashboardId: string, widgetId: string): Promise<Record<string, any>[]> {
+  const res = await fetch(`${API_BASE_URL}/dashboards/${dashboardId}/widgets/${widgetId}/data`, {
+    method: 'POST',
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || `Widget query failed: ${res.status}`);
+  return body.data;
+}
+
 export async function deleteDashboard(dashboardId: string): Promise<void> {
   const res = await fetch(`${API_BASE_URL}/dashboards/${dashboardId}`, {
     method: 'DELETE',

@@ -1,10 +1,18 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Check, ChevronDown, Pencil, Search, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { createAnalystSession, streamAnalystMessage } from '@/services/analystService';
-import { fetchAgentConfigs, saveAgentConfigs, resetAgentConfigs } from '@/services/agentConfigService';
-import type { AgentType, AgentConfig } from '@/services/agentConfigService';
-import AnalystStatePanel from './AnalystStatePanel';
+import { readUserSettings } from '@/services/userSettings';
+import {
+  activateAgentFleet,
+  createAgentFleet,
+  deleteAgentFleet,
+  fetchAgentFleets,
+  resetAgentFleet,
+  updateAgentFleet,
+} from '@/services/agentConfigService';
+import type { AgentFleet, AgentType, AgentConfig } from '@/services/agentConfigService';
 
 /* ═══════════════════════════════════════════════════════════════
    CONSTANTS
@@ -58,11 +66,17 @@ const STYLES = ['Documentary', 'Cinematic', 'Minimal', 'Bold', 'Technical'];
 
 /* ── Safe defaults so the UI never disappears ── */
 const DEFAULT_CONFIGS: Record<AgentType, AgentConfig> = {
-  coordinator: { enabled: true, instructions: 'You are the orchestrator. Delegate tasks clearly.' },
-  analyst: { enabled: true, instructions: 'You are the analyst. Use facts and data only.' },
+  coordinator: {
+    enabled: true,
+    instructions: 'Break requests into clear, ordered tasks and delegate each to the right agent. Preserve the user’s constraints, flag important ambiguity, and report blockers instead of guessing.',
+  },
+  analyst: {
+    enabled: true,
+    instructions: 'Use only the selected data sources. Compute every reported figure from data, preserve filters and time ranges, and explain important assumptions or limitations. Never invent results.',
+  },
   narrator: {
     enabled: true,
-    instructions: 'You are the narrator. Create compelling visuals and stories.',
+    instructions: 'Create a concise Remotion video from verified analysis artifacts. Preserve values, labels, units, and caveats; use purposeful data-driven scenes and motion, then report the rendered artifact and any blockers.',
     voice: 'professional',
     style: 'documentary',
     creativity: 50,
@@ -77,21 +91,37 @@ export default function AnalystPanel() {
   const { toast } = useToast();
   const [selectedAgent, setSelectedAgent] = useState<AgentType>('coordinator');
   const [configs, setConfigs] = useState<Record<AgentType, AgentConfig>>(DEFAULT_CONFIGS);
+  const [fleets, setFleets] = useState<AgentFleet[]>([]);
+  const [selectedFleetId, setSelectedFleetId] = useState('default');
+  const [activeFleetId, setActiveFleetId] = useState('default');
+  const [fleetName, setFleetName] = useState('');
+  const [newFleetName, setNewFleetName] = useState('');
+  const [fleetMenuOpen, setFleetMenuOpen] = useState(false);
+  const [fleetSearch, setFleetSearch] = useState('');
+  const [editingFleetId, setEditingFleetId] = useState<string | null>(null);
+  const [editingFleetName, setEditingFleetName] = useState('');
+  const [fleetActionLoading, setFleetActionLoading] = useState(false);
   const [configsLoading, setConfigsLoading] = useState(true);
   const [hasChanges, setHasChanges] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState('');
   const [isInjecting, setIsInjecting] = useState(false);
-  const [output, setOutput] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
 
   /* ── Load configs from API (non-blocking) ── */
   useEffect(() => {
     setConfigsLoading(true);
-    fetchAgentConfigs()
-      .then((c) => { if (c) setConfigs(c); })
+    fetchAgentFleets()
+      .then(({ fleets: loadedFleets, activeFleetId: loadedActiveFleetId }) => {
+        setFleets(loadedFleets);
+        setActiveFleetId(loadedActiveFleetId);
+        const activeFleet = loadedFleets.find((fleet) => fleet.id === loadedActiveFleetId) ?? loadedFleets[0];
+        if (activeFleet) {
+          setSelectedFleetId(activeFleet.id);
+          setFleetName(activeFleet.name);
+          setConfigs(activeFleet.configs);
+        }
+      })
       .catch((e) => toast({ title: 'Failed to load configs', description: String(e), variant: 'destructive' }))
       .finally(() => setConfigsLoading(false));
   }, [toast]);
@@ -100,12 +130,16 @@ export default function AnalystPanel() {
   useEffect(() => {
     if (!hasChanges) return;
     const t = setTimeout(() => {
-      saveAgentConfigs(configs)
-        .then(() => { setSavedAt(new Date()); setHasChanges(false); })
+      updateAgentFleet(selectedFleetId, { configs })
+        .then((fleet) => {
+          setFleets((currentFleets) => currentFleets.map((current) => current.id === fleet.id ? fleet : current));
+          setSavedAt(new Date());
+          setHasChanges(false);
+        })
         .catch((e) => toast({ title: 'Auto-save failed', description: String(e), variant: 'destructive' }));
     }, 1500);
     return () => clearTimeout(t);
-  }, [configs, hasChanges, toast]);
+  }, [configs, hasChanges, selectedFleetId, toast]);
 
   /* ── Handlers ── */
   const updateConfig = useCallback((agent: AgentType, patch: Partial<AgentConfig>) => {
@@ -115,8 +149,9 @@ export default function AnalystPanel() {
 
   const handleReset = async () => {
     try {
-      const defaults = await resetAgentConfigs();
-      setConfigs(defaults ?? DEFAULT_CONFIGS);
+      const fleet = await resetAgentFleet(selectedFleetId);
+      setConfigs(fleet.configs);
+      setFleets((currentFleets) => currentFleets.map((current) => current.id === fleet.id ? fleet : current));
       setHasChanges(false);
       setSavedAt(null);
       toast({ title: 'Reset to defaults' });
@@ -127,7 +162,8 @@ export default function AnalystPanel() {
 
   const handleManualSave = async () => {
     try {
-      await saveAgentConfigs(configs);
+      const fleet = await updateAgentFleet(selectedFleetId, { configs });
+      setFleets((currentFleets) => currentFleets.map((current) => current.id === fleet.id ? fleet : current));
       setSavedAt(new Date());
       setHasChanges(false);
       toast({ title: 'Saved' });
@@ -136,45 +172,134 @@ export default function AnalystPanel() {
     }
   };
 
-  const handleStartSession = async () => {
+  const handleSelectFleet = async (fleet: AgentFleet) => {
+    if (fleet.id === selectedFleetId) return;
     try {
-      const id = await createAnalystSession();
-      setSessionId(id);
-      setOutput(null);
-      setRefreshKey((k) => k + 1);
-      toast({ title: 'Session started', description: `ID: ${id.slice(0, 8)}...` });
-    } catch (err) {
-      toast({ title: 'Session failed', description: String(err), variant: 'destructive' });
+      if (hasChanges) {
+        const saved = await updateAgentFleet(selectedFleetId, { configs });
+        setFleets((currentFleets) => currentFleets.map((current) => current.id === saved.id ? saved : current));
+      }
+      setSelectedFleetId(fleet.id);
+      setFleetName(fleet.name);
+      setConfigs(fleet.configs);
+      setHasChanges(false);
+      setSavedAt(null);
+    } catch (e) {
+      toast({ title: 'Could not open fleet', description: String(e), variant: 'destructive' });
     }
   };
 
-  const handleInject = useCallback(() => {
-    if (!sessionId) {
-      toast({ title: 'No session', description: 'Start a session first.', variant: 'destructive' });
-      return;
+  const handleSaveFleetName = async (fleetId: string) => {
+    try {
+      const fleet = await updateAgentFleet(fleetId, { name: editingFleetName });
+      if (fleet.id === selectedFleetId) setFleetName(fleet.name);
+      setFleets((currentFleets) => currentFleets.map((current) => current.id === fleet.id ? fleet : current));
+      setEditingFleetId(null);
+      toast({ title: 'Team name saved' });
+    } catch (e) {
+      toast({ title: 'Could not rename team', description: String(e), variant: 'destructive' });
     }
-    if (!prompt.trim()) return;
-    setIsInjecting(true);
-    setOutput('');
+  };
 
-    const cleanup = streamAnalystMessage(sessionId, prompt.trim(), (event) => {
-      if (event.type === 'token') {
-        setOutput((prev) => (prev ?? '') + event.content);
-      } else if (event.type === 'done') {
-        setIsInjecting(false);
-        setRefreshKey((k) => k + 1);
-      } else if (event.type === 'error') {
-        toast({ title: 'Stream error', description: event.error, variant: 'destructive' });
-        setIsInjecting(false);
+  const handleCreateFleet = async () => {
+    const name = newFleetName.trim();
+    if (!name || fleetActionLoading) return;
+    setFleetActionLoading(true);
+    try {
+      if (hasChanges) {
+        const saved = await updateAgentFleet(selectedFleetId, { configs });
+        setFleets((currentFleets) => currentFleets.map((current) => current.id === saved.id ? saved : current));
       }
-    });
+      const fleet = await createAgentFleet(name, configs);
+      setFleets((currentFleets) => [...currentFleets, fleet]);
+      setSelectedFleetId(fleet.id);
+      setFleetName(fleet.name);
+      setNewFleetName('');
+      setHasChanges(false);
+      setSavedAt(null);
+      setFleetMenuOpen(false);
+      setFleetSearch('');
+      toast({ title: 'Team created', description: `${fleet.name} is ready to edit.` });
+    } catch (e) {
+      toast({ title: 'Could not create team', description: String(e), variant: 'destructive' });
+    } finally {
+      setFleetActionLoading(false);
+    }
+  };
 
-    // Cleanup on unmount mid-stream
-    return cleanup;
-  }, [sessionId, prompt, toast]);
+  const handleDeleteFleet = async (fleet: AgentFleet) => {
+    if (fleets.length <= 1 || !window.confirm(`Delete team "${fleet.name}"?`)) return;
+    try {
+      const result = await deleteAgentFleet(fleet.id);
+      setFleets(result.fleets);
+      setActiveFleetId(result.activeFleetId);
+      if (fleet.id === selectedFleetId) {
+        const nextFleet = result.fleets.find((item) => item.id === result.activeFleetId) ?? result.fleets[0];
+        setSelectedFleetId(nextFleet.id);
+        setFleetName(nextFleet.name);
+        setConfigs(nextFleet.configs);
+        setHasChanges(false);
+        setSavedAt(null);
+      }
+      setEditingFleetId(null);
+      toast({ title: 'Team deleted' });
+    } catch (e) {
+      toast({ title: 'Could not delete team', description: String(e), variant: 'destructive' });
+    }
+  };
+
+  const handleActivateFleet = async (fleetId: string) => {
+    try {
+      if (hasChanges) {
+        const saved = await updateAgentFleet(selectedFleetId, { configs });
+        setFleets((currentFleets) => currentFleets.map((current) => current.id === saved.id ? saved : current));
+      }
+      const result = await activateAgentFleet(fleetId);
+      setActiveFleetId(result.activeFleetId);
+      const activatedFleet = result.fleet;
+      setFleets((currentFleets) => currentFleets.map((current) => current.id === activatedFleet.id ? activatedFleet : current));
+      if (selectedFleetId === fleetId) setConfigs(activatedFleet.configs);
+      toast({ title: 'Team activated', description: `${activatedFleet.name} now runs orchestration.` });
+    } catch (e) {
+      toast({ title: 'Could not activate team', description: String(e), variant: 'destructive' });
+    }
+  };
+
+  const handleInject = useCallback(async () => {
+    const instructions = configs[selectedAgent].instructions.trim();
+    if (!instructions) return;
+    setIsInjecting(true);
+
+    try {
+      const activeSessionId = sessionId ?? await createAnalystSession();
+      if (!sessionId) setSessionId(activeSessionId);
+
+      const userSettings = readUserSettings();
+      streamAnalystMessage(activeSessionId, instructions, {
+        selectedSources: [],
+        fleetId: selectedFleetId,
+        modelSettings: {
+          provider: userSettings.selectedProvider,
+          model: userSettings.selectedModel,
+          api_key: userSettings.keys[userSettings.selectedProvider],
+        },
+      }, (event) => {
+        if (event.type === 'final') {
+          setIsInjecting(false);
+        } else if (event.type === 'error') {
+          toast({ title: 'Stream error', description: event.message, variant: 'destructive' });
+          setIsInjecting(false);
+        }
+      });
+    } catch (err) {
+      toast({ title: 'Could not start agent session', description: String(err), variant: 'destructive' });
+      setIsInjecting(false);
+    }
+  }, [sessionId, configs, selectedAgent, selectedFleetId, toast]);
 
   const current = configs[selectedAgent];
   const agentMeta = AGENTS.find((a) => a.id === selectedAgent)!;
+  const filteredFleets = fleets.filter((fleet) => fleet.name.toLowerCase().includes(fleetSearch.trim().toLowerCase()));
 
   return (
     <div className="relative space-y-6">
@@ -186,6 +311,120 @@ export default function AnalystPanel() {
           <span className="h-px flex-1 bg-gradient-to-r from-transparent via-white/10 to-transparent" />
           Agent Fleet
           <span className="h-px flex-1 bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+        </div>
+
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-white">Teams</h2>
+          <div className="relative flex w-full max-w-xs">
+            <input
+              value={newFleetName}
+              onChange={(event) => setNewFleetName(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') void handleCreateFleet(); }}
+              placeholder="Type team name"
+              aria-label="New team name"
+              disabled={configsLoading || fleetActionLoading}
+              className="h-9 min-w-0 flex-1 rounded-l-md border border-r-0 border-white/10 bg-slate-950/60 px-3 text-xs text-slate-200 outline-none placeholder:text-slate-600 focus:border-primary/40 disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setFleetMenuOpen((open) => !open);
+                setFleetSearch('');
+              }}
+              aria-label="Open team list"
+              aria-haspopup="dialog"
+              aria-expanded={fleetMenuOpen}
+              title="Choose a team"
+              className="flex h-9 w-8 shrink-0 items-center justify-center rounded-r-md border border-white/10 bg-slate-950/60 text-slate-400 hover:bg-slate-900 hover:text-white"
+            >
+              <ChevronDown size={13} className={`transition-transform ${fleetMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {fleetMenuOpen && (
+              <div role="dialog" aria-label="Choose team" className="absolute right-0 top-10 z-30 w-full rounded-md border border-white/10 bg-slate-950 p-1 shadow-xl shadow-black/40">
+                <div className="relative mb-1 border-b border-white/[0.07] pb-1">
+                  <Search size={13} className="pointer-events-none absolute left-2.5 top-2.5 text-slate-500" />
+                  <input
+                    autoFocus
+                    type="search"
+                    value={fleetSearch}
+                    onChange={(event) => setFleetSearch(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === 'Escape') setFleetMenuOpen(false); }}
+                    placeholder="Search teams"
+                    aria-label="Search teams"
+                    className="h-8 w-full rounded-sm bg-white/[0.04] pl-8 pr-2 text-xs text-slate-200 outline-none placeholder:text-slate-500 focus:bg-white/[0.07]"
+                  />
+                </div>
+                <div className="max-h-64 overflow-y-auto">
+                {filteredFleets.map((fleet) => (
+                  <div key={fleet.id} className={`flex min-w-0 items-center gap-1 rounded px-1 ${fleet.id === selectedFleetId ? 'bg-white/[0.07]' : 'hover:bg-white/[0.04]'}`}>
+                    {editingFleetId === fleet.id ? (
+                      <>
+                        <input
+                          autoFocus
+                          value={editingFleetName}
+                          onChange={(event) => setEditingFleetName(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') void handleSaveFleetName(fleet.id);
+                            if (event.key === 'Escape') setEditingFleetId(null);
+                          }}
+                          aria-label="Team name"
+                          className="h-8 min-w-0 flex-1 bg-transparent px-2 text-xs text-white outline-none"
+                        />
+                        <button type="button" onClick={() => void handleSaveFleetName(fleet.id)} aria-label="Save team name" title="Save name" className="rounded p-1.5 text-emerald-400 hover:bg-white/10">
+                          <Check size={14} />
+                        </button>
+                        <button type="button" onClick={() => setEditingFleetId(null)} aria-label="Cancel rename" title="Cancel" className="rounded p-1.5 text-slate-400 hover:bg-white/10">
+                          <X size={14} />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={fleet.id === selectedFleetId}
+                          onClick={() => { void handleSelectFleet(fleet); setFleetMenuOpen(false); setFleetSearch(''); }}
+                          className="flex h-8 min-w-0 flex-1 items-center justify-between px-2 text-left text-xs text-slate-200"
+                        >
+                          <span className="truncate">{fleet.name}</span>
+                          <span className="ml-2 shrink-0 text-[10px] text-slate-500">{fleet.id === activeFleetId ? 'Active' : ''}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setEditingFleetId(fleet.id); setEditingFleetName(fleet.name); }}
+                          aria-label={`Rename ${fleet.name}`}
+                          title="Rename team"
+                          className="rounded p-1.5 text-slate-400 hover:bg-white/10 hover:text-white"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteFleet(fleet)}
+                          disabled={fleets.length <= 1}
+                          aria-label={`Delete ${fleet.name}`}
+                          title={fleets.length <= 1 ? 'At least one team must remain' : 'Delete team'}
+                          className="rounded p-1.5 text-slate-400 hover:bg-red-500/10 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ))}
+                {filteredFleets.length === 0 && <p className="px-3 py-4 text-center text-xs text-slate-500">No teams found</p>}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-3 flex items-end justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Deep Agents</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Members of {fleetName || 'this team'}</p>
+          </div>
+          <span className="text-[10px] text-slate-500">Select an agent to edit its configuration</span>
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -263,26 +502,6 @@ export default function AnalystPanel() {
             </div>
           ) : (
             <div className="space-y-5 p-5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-slate-300">Agent Enabled</label>
-                <button
-                  onClick={() => updateConfig(selectedAgent, { enabled: !current.enabled })}
-                  className={`relative h-5 w-9 rounded-full transition-colors ${current.enabled ? 'bg-primary' : 'bg-slate-700'}`}
-                >
-                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${current.enabled ? 'left-[18px]' : 'left-0.5'}`} />
-                </button>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-300">Behavior Instructions</label>
-                <textarea
-                  value={current.instructions}
-                  onChange={(e) => updateConfig(selectedAgent, { instructions: e.target.value })}
-                  rows={5}
-                  className="w-full rounded-xl border border-white/10 bg-slate-900/50 p-3 text-xs leading-relaxed text-slate-200 placeholder:text-slate-600 outline-none transition-all focus:border-primary/30 focus:ring-1 focus:ring-primary/20 resize-none"
-                />
-              </div>
-
               {selectedAgent === 'narrator' && (
                 <>
                   <div>
@@ -340,7 +559,10 @@ export default function AnalystPanel() {
 
               {selectedAgent === 'coordinator' && (
                 <div className="space-y-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Agent Collaboration</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Agent Collaboration</p>
+                    <span className="text-[10px] text-slate-600 italic">Coordinator is always active</span>
+                  </div>
                   {(['analyst', 'narrator'] as AgentType[]).map((id) => (
                     <label key={id} className="flex items-center gap-3 rounded-lg border border-white/5 bg-white/[0.02] p-3 transition-colors hover:border-white/10">
                       <input
@@ -359,53 +581,39 @@ export default function AnalystPanel() {
           )}
         </div>
 
-        {/* Prompt Injection */}
+        {/* Behaviour Instructions */}
         <div className="lg:col-span-2 flex flex-col gap-4">
-          <div className="flex-1 rounded-2xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-xl">
+          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-xl">
             <div className="border-b border-white/[0.06] px-5 py-4">
-              <h3 className="text-sm font-semibold text-white">Prompt Injection</h3>
-              <p className="text-[10px] text-slate-500">Define specifications and inject into the active session.</p>
+              <h3 className="text-sm font-semibold text-white">Behaviour Instructions <span className="font-normal text-slate-500">(optional)</span></h3>
+              <p className="text-[10px] text-slate-500">Starter examples are editable. Add or clear extra guidance; TarQ’s built-in role instructions remain in effect.</p>
             </div>
 
             <div className="space-y-4 p-5">
               <div className="relative">
-                <div className="absolute left-4 top-4 text-primary/60 font-mono text-sm">{'>'}</div>
                 <textarea
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
+                  value={current.instructions}
+                  onChange={(e) => updateConfig(selectedAgent, { instructions: e.target.value })}
                   onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleInject(); }}
-                  placeholder="Enter your analytical prompt here..."
                   rows={8}
-                  className="w-full rounded-xl border border-white/10 bg-slate-950/50 py-4 pl-10 pr-4 font-mono text-sm leading-relaxed text-slate-200 placeholder:text-slate-600 outline-none transition-all focus:border-primary/30 focus:shadow-[0_0_20px_-5px_rgba(59,130,246,0.15)] focus:ring-1 focus:ring-primary/20 resize-none"
+                  className="w-full rounded-xl border border-white/10 bg-slate-950/50 p-4 font-mono text-sm leading-relaxed text-slate-200 placeholder:text-slate-600 outline-none transition-all focus:border-primary/30 focus:shadow-[0_0_20px_-5px_rgba(59,130,246,0.15)] focus:ring-1 focus:ring-primary/20 resize-none"
                 />
                 <div className="absolute bottom-3 right-3 text-[10px] text-slate-600">
-                  {prompt.length} chars · Cmd+Enter to inject
+                  {current.instructions.length} chars · Cmd+Enter to send
                 </div>
               </div>
 
               <div className="flex items-center justify-between">
-                {!sessionId ? (
-                  <Button
-                    onClick={handleStartSession}
-                    variant="outline"
-                    className="gap-2 border-white/10 bg-transparent text-xs text-slate-300 hover:bg-white/5 hover:text-white"
-                  >
-                    <span className="relative flex h-2 w-2">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
-                      <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-                    </span>
-                    Initialize Session
-                  </Button>
-                ) : (
+                {sessionId ? (
                   <div className="flex items-center gap-2 text-[11px] text-slate-500">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                     Session {sessionId.slice(0, 8)}...
                   </div>
-                )}
+                ) : <span />}
 
                 <Button
                   onClick={handleInject}
-                  disabled={isInjecting || !sessionId || !prompt.trim()}
+                  disabled={isInjecting || !current.instructions.trim()}
                   className="relative gap-2 overflow-hidden rounded-full bg-primary px-6 text-sm font-medium text-primary-foreground shadow-lg shadow-primary/20 transition-all hover:shadow-xl hover:shadow-primary/30 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50"
                 >
                   {isInjecting ? (
@@ -414,14 +622,14 @@ export default function AnalystPanel() {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
-                      Injecting...
+                      Sending...
                     </>
                   ) : (
                     <>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                       </svg>
-                      Inject Prompt
+                      Send
                     </>
                   )}
                 </Button>
@@ -431,40 +639,6 @@ export default function AnalystPanel() {
         </div>
       </section>
 
-      {/* ═════════════════════════════════════════════════════════
-         SECTION 3 — OUTPUT TERMINAL
-         ═════════════════════════════════════════════════════════ */}
-      <section className="rounded-2xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-xl">
-        <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
-          <div className="flex items-center gap-2">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-500">
-              <rect x="2" y="3" width="20" height="14" rx="2" />
-              <line x1="8" y1="21" x2="16" y2="21" />
-              <line x1="12" y1="17" x2="12" y2="21" />
-            </svg>
-            <h3 className="text-sm font-semibold text-white">Output Console</h3>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="h-1.5 w-1.5 rounded-full bg-slate-600" />
-            <span className="text-[10px] text-slate-500">{output ? 'Result received' : 'Idle'}</span>
-          </div>
-        </div>
-        <div className="relative p-5">
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent animate-[scan_3s_linear_infinite]" />
-          {output ? (
-            <div className="rounded-xl border border-white/5 bg-slate-950/50 p-4">
-              <p className="whitespace-pre-wrap font-mono text-sm leading-relaxed text-slate-300">{output}</p>
-            </div>
-          ) : (
-            <div className="flex h-32 items-center justify-center text-slate-600">
-              <p className="text-xs">Waiting for prompt injection...</p>
-            </div>
-          )}
-          <div className="mt-4">
-            <AnalystStatePanel sessionId={sessionId} refreshKey={refreshKey} />
-          </div>
-        </div>
-      </section>
 
       {/* ═════════════════════════════════════════════════════════
          FOOTER BAR

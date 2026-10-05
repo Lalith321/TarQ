@@ -2,12 +2,18 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
+import { API_BASE_URL } from '@/lib/apiEndpoints';
+import {
+  fetchDataSources as fetchPersistedDataSources,
+  importSQLSchema as importPersistedSQLSchema,
+  normalizeDataSource,
+} from '@/services/dataSourceService';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES
    ═══════════════════════════════════════════════════════════════ */
 
-type SourceType = 'structured' | 'live' | 'document';
+type SourceType = 'structured' | 'document' | 'live';
 type SourceStatus = 'connected' | 'ready' | 'streaming' | 'indexed' | 'failed' | 'processing';
 
 interface DataSource {
@@ -26,27 +32,26 @@ interface DataSource {
    ═══════════════════════════════════════════════════════════════ */
 
 const fetchDataSources = async (): Promise<DataSource[]> => {
-  await new Promise((r) => setTimeout(r, 400));
-  // Return [] so the page starts empty and only shows real API data
-  return [];
+  const rows = await fetchPersistedDataSources();
+  return rows.map((row) => normalizeDataSource(row));
 };
 
-const testSQLConnection = async (_payload: any): Promise<{ success: boolean; schemas: string[]; tables: string[] }> => {
-  await new Promise((r) => setTimeout(r, 800));
-  return { success: true, schemas: ['public'], tables: ['stocks', 'prices', 'news', 'fundamentals'] };
+const testSQLConnection = async (payload: any): Promise<{ success: boolean; schemas: string[]; tables: string[] }> => {
+  const res = await fetch(`${API_BASE_URL}/schemas/test-connection`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.success === false) {
+    throw new Error(body.error || 'Connection failed');
+  }
+  return body;
 };
 
 const importSQLSchema = async (_payload: any): Promise<DataSource> => {
-  await new Promise((r) => setTimeout(r, 600));
-  return {
-    id: `sql_${Date.now()}`,
-    type: 'structured',
-    name: _payload.database || 'New Database',
-    subtype: _payload.dbType || 'PostgreSQL',
-    status: 'connected',
-    meta: `${_payload.tables?.length || 4} tables`,
-    detail: 'Just now',
-  };
+  const row = await importPersistedSQLSchema(_payload);
+  return normalizeDataSource(row);
 };
 
 const uploadExcelFile = async (_file: File): Promise<{ sheets: string[]; preview: any[][]; columns: { name: string; type: string }[] }> => {
@@ -207,8 +212,6 @@ function SourceMenu({ type, onAction }: { type: SourceType; onAction: (action: s
   const items =
     type === 'structured'
       ? ['View schema', 'Preview data', 'Refresh schema', 'Edit connection', 'Remove']
-      : type === 'live'
-      ? ['View schema', 'Connection settings', 'Pause', 'Remove']
       : ['View details', 'Re-index', 'Download', 'Remove'];
 
   return (
@@ -291,7 +294,6 @@ function AddDataModal({ onClose, onSelect }: { onClose: () => void; onSelect: (t
   const options = [
     { id: 'sql', icon: Icons.database, title: 'SQL Database', desc: 'PostgreSQL, MySQL, SQL Server', color: 'hover:border-blue-500/30 hover:bg-blue-500/5' },
     { id: 'excel', icon: Icons.excel, title: 'Excel / CSV', desc: 'Import a spreadsheet file', color: 'hover:border-emerald-500/30 hover:bg-emerald-500/5' },
-    { id: 'live', icon: Icons.live, title: 'Live Data', desc: 'WebSocket streams', color: 'hover:border-amber-500/30 hover:bg-amber-500/5' },
     { id: 'document', icon: Icons.document, title: 'Documents', desc: 'PDF, DOCX, TXT, Markdown', color: 'hover:border-purple-500/30 hover:bg-purple-500/5' },
   ];
 
@@ -300,8 +302,8 @@ function AddDataModal({ onClose, onSelect }: { onClose: () => void; onSelect: (t
       <div className="w-full max-w-lg rounded-2xl border border-white/[0.08] bg-slate-900/95 p-6 shadow-2xl backdrop-blur-2xl animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
         <div className="mb-6 flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-white">Add data</h3>
-            <p className="text-xs text-slate-500">What would you like to connect?</p>
+            <h3 className="text-lg font-semibold text-white">Create schema</h3>
+            <p className="text-xs text-slate-500">Choose the source you want to connect.</p>
           </div>
           <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/5 hover:text-white">{Icons.close}</button>
         </div>
@@ -335,6 +337,8 @@ function SQLConnectDrawer({ onClose, onAdd }: { onClose: () => void; onAdd: (s: 
   const [testing, setTesting] = useState(false);
   const [tables, setTables] = useState<string[]>([]);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
+  const [liveTracking, setLiveTracking] = useState(false);
+  const [trackColumn, setTrackColumn] = useState('');
   const [form, setForm] = useState({ dbType: 'PostgreSQL', host: '', port: '5432', database: '', username: '', password: '', ssl: false });
   const { toast } = useToast();
 
@@ -345,6 +349,7 @@ function SQLConnectDrawer({ onClose, onAdd }: { onClose: () => void; onAdd: (s: 
       if (res.success) {
         setTables(res.tables);
         setSelectedTables(res.tables);
+        setTrackColumn(res.tables[0] || '');
         setStep('tables');
         toast({ title: 'Connection successful' });
       }
@@ -357,7 +362,7 @@ function SQLConnectDrawer({ onClose, onAdd }: { onClose: () => void; onAdd: (s: 
 
   const handleImport = async () => {
     try {
-      const source = await importSQLSchema({ ...form, tables: selectedTables });
+      const source = await importSQLSchema({ ...form, tables: selectedTables, liveTracking, trackColumn });
       onAdd(source);
       onClose();
     } catch (e: any) {
@@ -444,6 +449,43 @@ function SQLConnectDrawer({ onClose, onAdd }: { onClose: () => void; onAdd: (s: 
                   </label>
                 ))}
               </div>
+            </div>
+
+            <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-white">Enable live tracking</p>
+                  <p className="text-[10px] text-slate-500">Watch one column for updates in real time</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLiveTracking((v) => !v)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${liveTracking ? 'bg-primary' : 'bg-slate-700'}`}
+                  aria-label="Toggle live tracking"
+                >
+                  <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${liveTracking ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              {liveTracking && (
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <label className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-slate-500">Tracking column</label>
+                    <select
+                      value={trackColumn}
+                      onChange={(e) => setTrackColumn(e.target.value)}
+                      className="h-9 w-full rounded-lg border border-white/10 bg-slate-800/50 px-3 text-xs text-white outline-none focus:border-primary/30"
+                    >
+                      <option value="">Select a column</option>
+                      {selectedTables.flatMap((table) => [table, `${table}_updated_at`, `${table}_timestamp`]).map((col) => (
+                        <option key={col} value={col}>{col}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[10px] text-amber-300">
+                    Live tracking will monitor the selected column and keep this schema updated as new rows arrive.
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex gap-2">
@@ -844,8 +886,13 @@ export default function DataSourcesPage() {
   const { toast } = useToast();
 
   useEffect(() => {
-    fetchDataSources().then((s) => { setSources(s); setLoading(false); });
-  }, []);
+    fetchDataSources()
+      .then((s) => { setSources(s); setLoading(false); })
+      .catch((e) => {
+        toast({ title: 'Failed to load schemas', description: String(e), variant: 'destructive' });
+        setLoading(false);
+      });
+  }, [toast]);
 
   const filtered = sources.filter((s) => {
     const matchesSearch = s.name.toLowerCase().includes(search.toLowerCase());
@@ -860,7 +907,7 @@ export default function DataSourcesPage() {
   };
 
   const handleAdd = (source: DataSource) => {
-    setSources((prev) => [source, ...prev]);
+    setSources((prev) => [normalizeDataSource(source), ...prev]);
   };
 
   const handleMenuAction = (id: string, action: string) => {
@@ -904,15 +951,15 @@ export default function DataSourcesPage() {
         {/* Header */}
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight text-white">Data</h1>
-            <p className="mt-2 text-sm text-slate-400">Connect and manage the data available to your dashboards and agents.</p>
+            <h1 className="text-3xl font-bold tracking-tight text-white">Schemas</h1>
+            <p className="mt-2 text-sm text-slate-400">Connect and manage the schema sources available to your dashboards and agents.</p>
           </div>
           <Button
             onClick={() => setModalOpen(true)}
             className="gap-2 rounded-full bg-white px-5 text-sm font-medium text-slate-950 shadow-lg shadow-white/10 transition-all hover:shadow-xl hover:shadow-white/15 hover:scale-[1.02] active:scale-[0.98]"
           >
             {Icons.plus}
-            Add data
+            Add schema
           </Button>
         </div>
 
@@ -923,7 +970,7 @@ export default function DataSourcesPage() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search data..."
+              placeholder="Search schemas..."
               className="h-9 border-white/10 bg-slate-900/50 pl-9 text-sm text-white placeholder:text-slate-600 focus-visible:ring-primary/30"
             />
           </div>
@@ -951,8 +998,8 @@ export default function DataSourcesPage() {
           </div>
         ) : (
           <>
-            <Section title="Structured data" items={grouped.structured} />
-            <Section title="Live data" items={grouped.live} />
+            <Section title="Structured" items={grouped.structured} />
+            <Section title="Live" items={grouped.live} />
             <Section title="Documents" items={grouped.document} />
           </>
         )}
