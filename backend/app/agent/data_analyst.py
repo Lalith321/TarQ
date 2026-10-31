@@ -24,6 +24,9 @@ from .sandbox import SandboxBackendFactory
 from ..tools.dashboard_tool import dashboard_tool
 from ..tools.run_python_sandbox_tool import create_run_python_sandbox_tool
 from ..tools.sql_tool import create_sql_tools
+from ..tools.train_ml_model_tool import train_ml_model
+from ..tools.sagemaker_tool import manage_sagemaker_endpoint
+from ..tools.dataset_profiler_tool import profile_dataset_file
 from ..services.dashboard_service import dashboard_service
 from ..routers.agent_configs import get_agent_config
 from ..llm_config import create_chat_model
@@ -77,7 +80,9 @@ not claim completion when a required computation or artifact failed.
 
 
 # 3. Helper: Extract Artifacts from Tool Messages
-def _extract_artifacts_from_tool_messages(messages: List[Any]) -> Dict[str, str]:
+def _extract_artifacts_from_tool_messages(
+    messages: List[Any], dashboard_id: str | None = None
+) -> Dict[str, str]:
     """
     Parses ToolMessage outputs from SandboxExportQuerySQLTool and create_dashboard
     to populate the shared state 'artifacts' registry (name -> path).
@@ -105,15 +110,28 @@ def _extract_artifacts_from_tool_messages(messages: List[Any]) -> Dict[str, str]
             if isinstance(artifact, dict) and "id" in artifact:
                 artifact_path = artifact.get("artifact_path") or artifact.get("path")
                 if artifact_path:
-                    new_artifacts[f"dashboard_{artifact['id']}"] = artifact_path
+                    key = f"dashboard_{dashboard_id}" if dashboard_id else f"dashboard_{artifact['id']}"
+                    new_artifacts[key] = artifact_path
             else:
                 try:
                     payload = json.loads(msg.content)
                     if "artifact" in payload:
                         art = payload["artifact"]
-                        new_artifacts[f"dashboard_{art['id']}"] = art["path"]
+                        key = f"dashboard_{dashboard_id}" if dashboard_id else f"dashboard_{art['id']}"
+                        new_artifacts[key] = art["path"]
                 except (json.JSONDecodeError, TypeError):
                     pass
+
+        # Extract files created in Python sandbox
+        elif tool_name == "run_python_sandbox":
+            try:
+                payload = json.loads(msg.content)
+                for created_file in payload.get("files_created") or []:
+                    fname = Path(created_file).name
+                    if fname:
+                        new_artifacts[fname] = str(created_file)
+            except (json.JSONDecodeError, TypeError):
+                pass
 
     return new_artifacts
 
@@ -175,6 +193,7 @@ def data_analyst_node(state: GraphState, config: RunnableConfig) -> Command:
     existing_artifacts = state.get("artifacts", {})
     configurable = config.get("configurable", {})
     fleet_id = configurable.get("fleet_id")
+    dashboard_id = configurable.get("dashboard_id") or state.get("dashboard_id")
     selected_sources = state.get("selected_sources", [])
     sql_tools = []
     engines = []
@@ -218,16 +237,24 @@ def data_analyst_node(state: GraphState, config: RunnableConfig) -> Command:
     data_analyst_agent = create_deep_agent(
         name="Data Analyst",
         model=create_chat_model(configurable.get("model_settings")),
-        tools=[*sql_tools, *sandbox_toolset, dashboard_tool],
+        tools=[*sql_tools, *sandbox_toolset, dashboard_tool, train_ml_model, manage_sagemaker_endpoint, profile_dataset_file],
         system_prompt=(
             f"{DATA_ANALYST_PROMPT}\n\n"
             f"Additional configured instructions: {get_agent_config('analyst', fleet_id).instructions}"
         ),
     )
 
+    from ..routers.artifacts import ARTIFACT_DIR, register_artifact
+    pre_existing_artifact_files = (
+        {p.name for p in ARTIFACT_DIR.iterdir() if p.is_file()}
+        if ARTIFACT_DIR.is_dir()
+        else set()
+    )
+
     # Construct context task message
     task_prompt = (
         f"Active Task: {task_desc}\n"
+        f"Active Dashboard ID: {dashboard_id or 'standalone'}\n"
         f"User Instructions: {state.get('messages', [])[-1]}\n"
         f"Selected SQL databases and tables: {json.dumps(source_context, indent=2)}\n"
         f"Available Host/Sandbox Artifacts: {json.dumps(existing_artifacts, indent=2)}"
@@ -240,8 +267,20 @@ def data_analyst_node(state: GraphState, config: RunnableConfig) -> Command:
         for engine in engines:
             engine.dispose()
 
+    # Register any newly created files in ARTIFACT_DIR for this dashboard
+    if dashboard_id and ARTIFACT_DIR.is_dir():
+        for file_path in ARTIFACT_DIR.iterdir():
+            if (
+                file_path.is_file()
+                and file_path.name != "MANIFEST.json"
+                and file_path.name not in pre_existing_artifact_files
+            ):
+                register_artifact(file_path.name, dashboard_id=dashboard_id)
+
     # Extract new artifacts and update dictionary
-    discovered_artifacts = _extract_artifacts_from_tool_messages(result["messages"])
+    discovered_artifacts = _extract_artifacts_from_tool_messages(
+        result["messages"], dashboard_id=dashboard_id
+    )
     updated_artifacts = {**existing_artifacts, **discovered_artifacts}
     analyst_report = result["messages"][-1]
     if isinstance(analyst_report, AIMessage):
