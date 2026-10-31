@@ -25,7 +25,7 @@ from app.models.schemas import (
     DashboardSpec, WidgetSpec, WidgetType, WidgetPosition,
     GisConfig, GisGeometry, DrillDownConfig,
 )
-from app.routers import agent_configs, analyst, artifacts, dashboard, documents, context, ml, schema, logs
+from app.routers import agent_configs, analyst, artifacts, dashboard, documents, context, ml, schema, logs, sagemaker, datasets
 from app.services.dashboard_service import dashboard_service
 
 @asynccontextmanager
@@ -61,6 +61,8 @@ app.include_router(artifacts.router)
 app.include_router(documents.router)
 app.include_router(context.router)
 app.include_router(ml.router)
+app.include_router(sagemaker.router)
+app.include_router(datasets.router)
 app.include_router(schema.router)
 app.include_router(logs.router)
 
@@ -120,12 +122,33 @@ def _seed_demo_dashboard() -> None:
         position=WidgetPosition(x=6, y=2, w=6, h=2),
     )
 
+    tiled_cluster_widget = WidgetSpec(
+        id="w_tiled_cluster",
+        type=WidgetType.TILED_STRUCTURE,
+        title="High-Dimensional Single-Cell Latent Clusters",
+        data=[
+            {"umap_1": -3.2, "umap_2": 2.8, "cluster": "CD8+ Effector T", "label": "CD8+ T-Cell"},
+            {"umap_1": -2.7, "umap_2": 3.1, "cluster": "CD8+ Effector T", "label": "CD8+ Memory"},
+            {"umap_1": -3.0, "umap_2": 2.5, "cluster": "CD8+ Effector T", "label": "CD8+ Exhausted"},
+            {"umap_1": 4.1, "umap_2": -1.2, "cluster": "CD19+ B-Cell", "label": "Follicular B-Cell"},
+            {"umap_1": 4.5, "umap_2": -1.6, "cluster": "CD19+ B-Cell", "label": "Memory B-Cell"},
+            {"umap_1": 0.2, "umap_2": -4.1, "cluster": "CD14+ Monocyte", "label": "Classical Monocyte"},
+            {"umap_1": 0.6, "umap_2": -3.8, "cluster": "CD14+ Monocyte", "label": "Non-classical Monocyte"},
+            {"umap_1": 1.8, "umap_2": 3.6, "cluster": "NK Cells", "label": "CD56dim NK"},
+            {"umap_1": 2.1, "umap_2": 3.9, "cluster": "NK Cells", "label": "CD56bright NK"},
+        ],
+        x_field="umap_1",
+        y_field="umap_2",
+        group_by="cluster",
+        position=WidgetPosition(x=0, y=4, w=12, h=5),
+    )
+
     dashboard_service.create(
         DashboardSpec(
             id="demo",
             title="Analysis Overview",
-            description="Sample analysis summary with key metrics and recent results.",
-            widgets=[agent_cost_widget, success_rate_widget, recent_runs_widget],
+            description="Sample analysis summary with key metrics, real-time spatial tiling, and recent results.",
+            widgets=[agent_cost_widget, success_rate_widget, recent_runs_widget, tiled_cluster_widget],
         )
     )
 

@@ -33,6 +33,8 @@ class GraphState(MessagesState):
     current_task: str
     # Validated schema IDs and table names for this request; never credentials.
     selected_sources: list[dict]
+    # Optional active dashboard ID so outputs/videos/PPTs are mapped to the right dashboard
+    dashboard_id: Optional[str]
 
 
 class TodoUpdate(BaseModel):

@@ -23,14 +23,33 @@ function generateId() { return `msg_${Date.now()}_${Math.random().toString(36).s
 
 export function useDashboardAgent(
   _sessionId: string,
-  opts?: { onDashboardGenerated?: (widgets: WidgetSpec[]) => void; dashboardId?: string; existingWidgets?: WidgetSpec[]; selectedSources?: SelectedAnalystSource[]; fleetId?: string }
+  opts?: {
+    onDashboardGenerated?: (widgets: WidgetSpec[]) => void;
+    onRunComplete?: () => void;
+    dashboardId?: string;
+    existingWidgets?: WidgetSpec[];
+    selectedSources?: SelectedAnalystSource[];
+    fleetId?: string;
+  }
 ): UseDashboardAgentReturn {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [sending, setSending] = useState(false);
   const activeStreamRef = useRef<AnalystStreamControl | null>(null);
   const stopRequestedRef = useRef(false);
-  // LangGraph thread_id — created lazily on first message
+  // LangGraph thread_id — created lazily on first message per dashboard
   const threadRef = useRef<string | null>(null);
+
+  // Reset session and chat messages when switching between dashboards so state is isolated
+  useEffect(() => {
+    activeStreamRef.current?.interrupt();
+    activeStreamRef.current = null;
+    if (threadRef.current) {
+      void closeAnalystSession(threadRef.current);
+      threadRef.current = null;
+    }
+    setMessages([]);
+    setSending(false);
+  }, [opts?.dashboardId]);
 
   useEffect(() => () => {
     activeStreamRef.current?.interrupt();
@@ -46,7 +65,7 @@ export function useDashboardAgent(
     setSending(true);
 
     const run = async () => {
-      // Lazily create a LangGraph session (thread_id) once per hook instance
+      // Lazily create a LangGraph session (thread_id) once per dashboard
       if (!threadRef.current) {
         threadRef.current = await createAnalystSession();
       }
@@ -59,6 +78,7 @@ export function useDashboardAgent(
         const control = streamAnalystMessage(sessionId, text, {
           selectedSources: opts?.selectedSources ?? [],
           fleetId: opts?.fleetId,
+          dashboardId: opts?.dashboardId,
           modelSettings: {
             provider: settings.selectedProvider,
             model: settings.selectedModel,
@@ -77,6 +97,8 @@ export function useDashboardAgent(
               id: generateId(), role: 'agent', content: `Created ${widget.title}.`,
               timestamp: new Date().toISOString(), widget,
             }]);
+          } else if (event.type === 'tool_finished') {
+            opts?.onRunComplete?.();
           } else if (event.type === 'final') {
             control.close();
             activeStreamRef.current = null;
@@ -90,6 +112,7 @@ export function useDashboardAgent(
             );
             setSending(false);
             stopRequestedRef.current = false;
+            opts?.onRunComplete?.();
             resolve();
           } else if (event.type === 'interrupted') {
             control.close();
@@ -101,6 +124,7 @@ export function useDashboardAgent(
             );
             setSending(false);
             stopRequestedRef.current = false;
+            opts?.onRunComplete?.();
             resolve();
           } else if (event.type === 'error') {
             control.close();

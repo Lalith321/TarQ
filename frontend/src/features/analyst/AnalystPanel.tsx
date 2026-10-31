@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Check, ChevronDown, Pencil, Search, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
@@ -89,6 +89,10 @@ const DEFAULT_CONFIGS: Record<AgentType, AgentConfig> = {
 
 export default function AnalystPanel() {
   const { toast } = useToast();
+  // Keep toast in a ref so effects always have the latest version
+  // without needing it as a dependency (avoids spurious re-runs).
+  const toastRef = useRef(toast);
+  useEffect(() => { toastRef.current = toast; });
   const [selectedAgent, setSelectedAgent] = useState<AgentType>('coordinator');
   const [configs, setConfigs] = useState<Record<AgentType, AgentConfig>>(DEFAULT_CONFIGS);
   const [fleets, setFleets] = useState<AgentFleet[]>([]);
@@ -122,9 +126,9 @@ export default function AnalystPanel() {
           setConfigs(activeFleet.configs);
         }
       })
-      .catch((e) => toast({ title: 'Failed to load configs', description: String(e), variant: 'destructive' }))
+      .catch((e) => toastRef.current({ title: 'Failed to load configs', description: String(e), variant: 'destructive' }))
       .finally(() => setConfigsLoading(false));
-  }, [toast]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- toastRef is a stable ref
 
   /* ── Auto-save ── */
   useEffect(() => {
@@ -136,10 +140,10 @@ export default function AnalystPanel() {
           setSavedAt(new Date());
           setHasChanges(false);
         })
-        .catch((e) => toast({ title: 'Auto-save failed', description: String(e), variant: 'destructive' }));
+        .catch((e) => toastRef.current({ title: 'Auto-save failed', description: String(e), variant: 'destructive' }));
     }, 1500);
     return () => clearTimeout(t);
-  }, [configs, hasChanges, selectedFleetId, toast]);
+  }, [configs, hasChanges, selectedFleetId]); // toastRef is a stable ref, omitted intentionally
 
   /* ── Handlers ── */
   const updateConfig = useCallback((agent: AgentType, patch: Partial<AgentConfig>) => {

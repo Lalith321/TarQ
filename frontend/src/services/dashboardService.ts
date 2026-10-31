@@ -78,3 +78,27 @@ export async function updateDashboard(
   if (!res.ok) throw new Error(`updateDashboard failed: ${res.status}`);
   return res.json();
 }
+
+export function getDashboardReportUrl(dashboardId: string, download = false): string {
+  return `${API_BASE_URL}/dashboards/${encodeURIComponent(dashboardId)}/report.pdf?download=${download ? 'true' : 'false'}`;
+}
+
+export async function generateDashboardReportPdf(
+  dashboardId: string,
+  spec?: DashboardSpec
+): Promise<Blob> {
+  const res = await fetch(
+    `${API_BASE_URL}/dashboards/${encodeURIComponent(dashboardId)}/report.pdf?download=true`,
+    {
+      method: spec ? 'POST' : 'GET',
+      headers: spec ? { 'Content-Type': 'application/json' } : undefined,
+      body: spec ? JSON.stringify(spec) : undefined,
+    }
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Failed to generate PDF report (${res.status})`);
+  }
+  return res.blob();
+}
+

@@ -116,6 +116,7 @@ def create_narrator_tools(
     artifact_dir: str = "/workspace/artifacts",
     artifact_registry: dict[str, str] | None = None,
     artifact_reader: Callable[[str], Any] | None = None,
+    dashboard_id: str | None = None,
     **backend_kwargs: Any,
 ) -> List[Any]:
     """Factory creating Narrator tools bound to a specific SandboxBackend instance.
@@ -125,6 +126,7 @@ def create_narrator_tools(
                  or an instantiated SandboxBackend instance.
         remotion_dir: Path to the Remotion project root inside the sandbox.
         artifact_dir: Path to the shared artifacts directory inside the sandbox.
+        dashboard_id: Optional active dashboard ID used to isolate artifacts per dashboard.
         **backend_kwargs: Arguments passed to SandboxBackendFactory.create() if a backend name is supplied.
     """
     if isinstance(backend, str):
@@ -132,6 +134,23 @@ def create_narrator_tools(
     else:
         sandbox = backend
     artifact_registry = artifact_registry or {}
+
+    def _filter_manifest_for_dashboard(raw_manifest: str | None) -> Any:
+        if not raw_manifest:
+            return None
+        if not dashboard_id:
+            return raw_manifest
+        try:
+            parsed = json.loads(raw_manifest)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        return {
+            key: meta
+            for key, meta in parsed.items()
+            if isinstance(meta, dict) and meta.get("dashboard_id") == dashboard_id
+        }
 
     def ensure_remotion_project() -> None:
         package_path = f"{remotion_dir.rstrip('/')}/package.json"
@@ -195,14 +214,21 @@ registerRoot(Root);
 
         if artifact_registry:
             manifest_res = sandbox.read_file(manifest_path)
-            manifest = _get_result_content(manifest_res) if _is_success(manifest_res) else None
+            raw_manifest = _get_result_content(manifest_res) if _is_success(manifest_res) else None
+            manifest = _filter_manifest_for_dashboard(raw_manifest)
             return json.dumps({"analysis_artifacts": artifact_registry, "sandbox_manifest": manifest})
         
         # Try reading MANIFEST.json first
         manifest_res = sandbox.read_file(manifest_path)
         if _is_success(manifest_res):
-            return _get_result_content(manifest_res)
+            raw_manifest = _get_result_content(manifest_res)
+            if dashboard_id:
+                return json.dumps(_filter_manifest_for_dashboard(raw_manifest) or {})
+            return raw_manifest
         
+        if dashboard_id:
+            return json.dumps({})
+
         # Fallback to directory listing if no manifest exists
         list_res = sandbox.list_dir(artifact_dir)
         if _is_success(list_res):
@@ -424,17 +450,22 @@ registerRoot(Root);
 
         Returns the final artifact path and render status.
         """
-        filename = os.path.basename(output_path)
+        display_name = os.path.basename(output_path)
+        if dashboard_id and not display_name.startswith(f"{dashboard_id}_"):
+            filename = f"{dashboard_id}_{display_name}"
+        else:
+            filename = display_name
         target_path = (
             output_path
-            if output_path.startswith(artifact_dir)
+            if (output_path.startswith(artifact_dir) and not dashboard_id)
             else f"{artifact_dir.rstrip('/')}/{filename}"
         )
         started_at = time.monotonic()
         logger.info(
-            "Starting video render: composition=%s output=%s",
+            "Starting video render: composition=%s output=%s dashboard_id=%s",
             composition_id,
             filename,
+            dashboard_id,
         )
         ensure_remotion_project()
         logger.info("Remotion project prepared for composition=%s", composition_id)
@@ -468,13 +499,18 @@ registerRoot(Root);
                     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
                     manifest = {{}}
-                manifest[output_path.name] = {{"type": "video/mp4", "path": str(output_path), "composition_id": {composition_id!r}, "size": output_path.stat().st_size}}
+                entry_meta = {{"type": "video/mp4", "path": str(output_path), "composition_id": {composition_id!r}, "size": output_path.stat().st_size}}
+                if {dashboard_id!r}:
+                    entry_meta["dashboard_id"] = {dashboard_id!r}
+                    entry_meta["name"] = {display_name!r}
+                manifest[output_path.name] = entry_meta
                 manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
                 print(json.dumps({{
                     "status": "success",
                     "composition_id": {composition_id!r},
                     "artifact_path": str(output_path),
                     "filename": output_path.name,
+                    "dashboard_id": {dashboard_id!r},
                     "size": output_path.stat().st_size
                 }}))
             else:

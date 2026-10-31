@@ -16,7 +16,7 @@ export default function AnalystPage() {
       {/* Page header */}
       <div className="mb-6 flex items-end justify-between">
         <div>
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest" style={{ color: 'var(--accent)' }}>
             TarQ · AI Analyst
           </p>
           <h1 className="text-2xl font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>
@@ -28,8 +28,7 @@ export default function AnalystPage() {
         </div>
         <div className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
           <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ background: 'var(--status-ok)' }} />
-            <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: 'var(--status-ok)' }} />
+            <span className="inline-flex h-2 w-2 rounded-full" style={{ background: 'var(--status-ok)' }} />
           </span>
           System operational
         </div>

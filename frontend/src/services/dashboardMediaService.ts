@@ -1,4 +1,5 @@
-// services/dashboardMediaService.ts
+import { API_BASE_URL } from '@/lib/apiEndpoints';
+
 export interface VideoItem {
   id: string;
   title: string;
@@ -19,18 +20,41 @@ export interface UploadItem {
   id: string;
   name: string;
   url: string;
-  type: 'image' | 'icon';
+  type: 'image' | 'icon' | 'pdf' | 'csv' | 'json';
   uploadedAt: string;
 }
 
 export const fetchDashboardMedia = async (dashboardId: string): Promise<{ videos: VideoItem[]; presentations: PresentationItem[] }> => {
-  const res = await fetch(`/api/dashboards/${dashboardId}/media`);
+  const res = await fetch(`${API_BASE_URL}/dashboards/${encodeURIComponent(dashboardId)}/media`);
   if (!res.ok) throw new Error('Failed to fetch media');
-  return res.json();
+  const items = await res.json();
+  const videos: VideoItem[] = [];
+  const presentations: PresentationItem[] = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const fullUrl = item.url?.startsWith('http') ? item.url : `${API_BASE_URL}${item.url}`;
+    if (item.type === 'video') {
+      videos.push({
+        id: item.id,
+        title: item.name,
+        url: fullUrl,
+        duration: 0,
+        uploadedAt: new Date().toISOString(),
+      });
+    } else if (item.type === 'ppt') {
+      presentations.push({
+        id: item.id,
+        title: item.name,
+        slideCount: 0,
+        url: fullUrl,
+        uploadedAt: new Date().toISOString(),
+      });
+    }
+  }
+  return { videos, presentations };
 };
 
 export const fetchDashboardUploads = async (dashboardId: string): Promise<UploadItem[]> => {
-  const res = await fetch(`/api/dashboards/${dashboardId}/uploads`);
+  const res = await fetch(`${API_BASE_URL}/dashboards/${encodeURIComponent(dashboardId)}/uploads`);
   if (!res.ok) throw new Error('Failed to fetch uploads');
   return res.json();
 };
@@ -38,7 +62,7 @@ export const fetchDashboardUploads = async (dashboardId: string): Promise<Upload
 export const uploadFile = async (dashboardId: string, file: File): Promise<UploadItem> => {
   const formData = new FormData();
   formData.append('file', file);
-  const res = await fetch(`/api/dashboards/${dashboardId}/uploads`, {
+  const res = await fetch(`${API_BASE_URL}/dashboards/${encodeURIComponent(dashboardId)}/uploads`, {
     method: 'POST',
     body: formData,
   });
@@ -47,11 +71,11 @@ export const uploadFile = async (dashboardId: string, file: File): Promise<Uploa
 };
 
 export const deleteUpload = async (dashboardId: string, uploadId: string): Promise<void> => {
-  const res = await fetch(`/api/dashboards/${dashboardId}/uploads/${uploadId}`, { method: 'DELETE' });
+  const res = await fetch(`${API_BASE_URL}/dashboards/${encodeURIComponent(dashboardId)}/uploads/${encodeURIComponent(uploadId)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Delete failed');
 };
 
-export const deleteMedia = async (dashboardId: string, mediaId: string, type: 'video' | 'presentation'): Promise<void> => {
-  const res = await fetch(`/api/dashboards/${dashboardId}/media/${type}/${mediaId}`, { method: 'DELETE' });
+export const deleteMedia = async (dashboardId: string, mediaId: string, _type?: 'video' | 'presentation'): Promise<void> => {
+  const res = await fetch(`${API_BASE_URL}/dashboards/${encodeURIComponent(dashboardId)}/media/${encodeURIComponent(mediaId)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Delete failed');
 };

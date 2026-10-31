@@ -188,29 +188,45 @@ def narrator(state: GraphState, config: RunnableConfig) -> Command:
 
    configurable = config.get("configurable", {})
    fleet_id = configurable.get("fleet_id")
+   dashboard_id = configurable.get("dashboard_id") or state.get("dashboard_id")
    narrator_config = get_agent_config("narrator", fleet_id)
    from .data_analyst import _sandbox_backend as analyst_sandbox
+   from ..routers.artifacts import register_artifact
+
+   raw_artifacts = state.get("artifacts", {}) or {}
+   scoped_artifacts = {
+      name: path
+      for name, path in raw_artifacts.items()
+      if not dashboard_id
+      or not name.startswith("dashboard_")
+      or name == f"dashboard_{dashboard_id}"
+   }
 
    narrator_agent = create_deep_agent(
       name="Narrator",
       model=create_chat_model(configurable.get("model_settings")),
       tools=create_narrator_tools(
          backend=_get_narrator_sandbox(),
-         artifact_registry=state.get("artifacts", {}),
+         artifact_registry=scoped_artifacts,
          artifact_reader=analyst_sandbox.read_file,
+         dashboard_id=dashboard_id,
       ),
       system_prompt=NARRATOR_PROMPT,
    )
    task = HumanMessage(
       content=f"Task: {task_desc}\n"
+      f"Active Dashboard ID: {dashboard_id or 'standalone'}\n"
       f"{_analyst_handoff(state.get('messages', []))}\n"
-      f"Available artifacts: {state.get('artifacts', {})}\n"
+      f"Available artifacts: {scoped_artifacts}\n"
       f"Configured instructions: {narrator_config.instructions}\n"
       f"Voice: {narrator_config.voice or 'professional'}; style: {narrator_config.style or 'documentary'}; "
       f"creativity: {narrator_config.creativity if narrator_config.creativity is not None else 50}%"
    )
    result = narrator_agent.invoke({"messages": [task]})
    rendered_artifacts = _extract_rendered_artifacts(result["messages"])
+   if dashboard_id:
+      for filename in rendered_artifacts:
+         register_artifact(filename, dashboard_id=dashboard_id)
 
    return Command(
       goto="Master Coordinator",

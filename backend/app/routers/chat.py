@@ -101,6 +101,12 @@ async def websocket_agent_stream(websocket: WebSocket, session_id: str):
                 await websocket.send_json({"type": "error", "message": str(exc)})
                 continue
 
+            dashboard_id = data.get("dashboard_id")
+            if dashboard_id is not None and not isinstance(dashboard_id, str):
+                await websocket.send_json({"type": "error", "message": "dashboard_id must be a string"})
+                continue
+            dashboard_id = dashboard_id.strip() if isinstance(dashboard_id, str) and dashboard_id.strip() else None
+
             fleet_id = data.get("fleet_id")
             if fleet_id is not None and (not isinstance(fleet_id, str) or not agent_fleet_exists(fleet_id)):
                 await websocket.send_json({"type": "error", "message": "Selected agent fleet was not found"})
@@ -113,22 +119,55 @@ async def websocket_agent_stream(websocket: WebSocket, session_id: str):
                 await websocket.send_json({"type": "error", "message": "Model preferences are invalid"})
                 continue
 
+            initial_artifacts: dict[str, str] = {}
+            if dashboard_id:
+                try:
+                    from ..core.workspace_paths import workspace_dir
+                    from .artifacts import INPUT_DIR, _read_manifest
+
+                    current_dash = dashboard_service.get(dashboard_id)
+                    if current_dash is not None:
+                        scratch_dir = workspace_dir() / "dashboard_scratch"
+                        scratch_dir.mkdir(parents=True, exist_ok=True)
+                        dash_path = scratch_dir / f"dashboard_{dashboard_id}.json"
+                        dash_path.write_text(
+                            json.dumps(current_dash.model_dump(mode="json"), indent=2),
+                            encoding="utf-8",
+                        )
+                        initial_artifacts[f"dashboard_{dashboard_id}"] = str(dash_path)
+
+                    input_manifest = _read_manifest(INPUT_DIR / "MANIFEST.json")
+                    for meta in input_manifest.values():
+                        if isinstance(meta, dict) and meta.get("dashboard_id") == dashboard_id:
+                            stored_name = str(meta.get("stored_name") or "")
+                            raw_name = str(meta.get("name") or stored_name)
+                            if stored_name and (INPUT_DIR / stored_name).is_file():
+                                initial_artifacts[f"input_{raw_name}"] = str(INPUT_DIR / stored_name)
+                except Exception:
+                    pass
+
             request_config = {
                 "configurable": {
                     "thread_id": session_id,
                     "fleet_id": fleet_id,
                     "model_settings": model_settings,
+                    "dashboard_id": dashboard_id,
                 }
             }
 
             async def stream_graph() -> None:
                 final_content = ""
+                graph_input: dict[str, object] = {
+                    "messages": [HumanMessage(content=user_message)],
+                    "selected_sources": selected_sources,
+                }
+                if dashboard_id:
+                    graph_input["dashboard_id"] = dashboard_id
+                if initial_artifacts:
+                    graph_input["artifacts"] = initial_artifacts
 
                 async for event in compiled_app.astream_events(
-                    {
-                        "messages": [HumanMessage(content=user_message)],
-                        "selected_sources": selected_sources,
-                    },
+                    graph_input,
                     config=request_config,
                     version="v2",
                 ):
@@ -163,6 +202,17 @@ async def websocket_agent_stream(websocket: WebSocket, session_id: str):
                                         "widget": widget,
                                     })
                         else:
+                            if dashboard_id and (tool_name or "").endswith("render_video"):
+                                try:
+                                    from .artifacts import register_artifact
+                                    output = event["data"].get("output")
+                                    raw_out = getattr(output, "content", output)
+                                    if isinstance(raw_out, str):
+                                        parsed_out = json.loads(raw_out)
+                                        if parsed_out.get("status") == "success" and parsed_out.get("filename"):
+                                            register_artifact(parsed_out["filename"], dashboard_id=dashboard_id)
+                                except Exception:
+                                    pass
                             await websocket.send_json({"type": "tool_finished", "toolCallId": run_id})
 
                 await websocket.send_json({"type": "final", "content": final_content})

@@ -698,7 +698,7 @@ function LiveDataDrawer({ onClose, onAdd }: { onClose: () => void; onAdd: (s: Da
                     onChange={(e) => setForm((f) => ({ ...f, [field.key]: e.target.value }))}
                     className="h-9 w-full rounded-lg border border-white/10 bg-slate-800/50 px-3 text-xs text-white outline-none focus:border-primary/30"
                   >
-                    {field.options.map((o) => <option key={o}>{o}</option>)}
+                    {('options' in field && Array.isArray((field as any).options)) ? (field as any).options.map((o: string) => <option key={o}>{o}</option>) : null}
                   </select>
                 ) : (
                   <Input

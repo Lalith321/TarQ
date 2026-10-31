@@ -1,15 +1,47 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 cd "$ROOT_DIR"
 
-[ -f backend/.env ] || { echo "backend/.env missing"; exit 1; }
+if [[ ! -f backend/.env ]]; then
+  echo "backend/.env missing"
+  exit 1
+fi
+
+command -v docker >/dev/null 2>&1 || { echo "Docker is required"; exit 1; }
+docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
 
 WORKSPACE_DIR="$ROOT_DIR/workspace"
 mkdir -p "$WORKSPACE_DIR"
 
 docker network inspect tarq-network >/dev/null 2>&1 || docker network create tarq-network
+
+if docker container inspect postgres >/dev/null 2>&1; then
+  docker network connect tarq-network postgres >/dev/null 2>&1 || true
+  if [[ "$(docker inspect -f '{{.State.Running}}' postgres)" != "true" ]]; then
+    docker start postgres >/dev/null
+  fi
+else
+  docker volume create tarq-postgres-data >/dev/null
+  docker run -d --name postgres --network tarq-network \
+    --env-file backend/.env \
+    -v tarq-postgres-data:/var/lib/postgresql \
+    --restart unless-stopped \
+    postgres:18-alpine >/dev/null
+fi
+
+for attempt in {1..60}; do
+  if docker exec postgres pg_isready -q >/dev/null 2>&1; then
+    break
+  fi
+  if [[ "$attempt" == 60 ]]; then
+    echo "Postgres did not become ready"
+    docker logs --tail 50 postgres
+    exit 1
+  fi
+  sleep 1
+done
 
 docker build -f Dockerfile.backend -t tarq-backend .
 docker build -f Dockerfile.frontend -t tarq-frontend .

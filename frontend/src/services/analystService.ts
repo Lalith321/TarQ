@@ -27,6 +27,7 @@ export interface SelectedAnalystSource {
 export interface AnalystChatRequest {
   selectedSources: SelectedAnalystSource[];
   fleetId?: string;
+  dashboardId?: string;
   modelSettings: { provider: string; model: string; api_key: string };
 }
 
@@ -57,6 +58,7 @@ export function streamAnalystMessage(
       message,
       selected_sources: request.selectedSources,
       fleet_id: request.fleetId,
+      dashboard_id: request.dashboardId,
       model_settings: request.modelSettings,
     }));
     if (interruptRequested) ws.send(JSON.stringify({ type: 'interrupt' }));

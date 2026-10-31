@@ -29,7 +29,12 @@ export default function AppLogConsole({ id, isOpen, onToggle }: AppLogConsolePro
   const logViewport = useRef<HTMLDivElement>(null);
   const followOutput = useRef(true);
 
-  useEffect(() => subscribeAppLogs(setEntries), []);
+  useEffect(() => {
+    const unsub = subscribeAppLogs(setEntries);
+    return () => {
+      unsub();
+    };
+  }, []);
 
   useEffect(() => {
     let stopped = false;

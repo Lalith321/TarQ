@@ -2,31 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { fetchAnalystState } from '@/services/analystService';
-import { WidgetRenderer } from '@/components/WidgetRenderer';
+import WidgetRenderer from '@/features/dashboard/components/widgets/WidgetRenderer';
 import type { AnalystState, WidgetSpec } from '@/services/types';
-import { buildLineChartModel } from '@/lib/lineChartData';
 
 interface Props {
   sessionId: string | null;
   refreshKey?: number;
-}
-
-/** Convert dashboard_tool's {data, x_field, y_field} shape → WidgetRenderer's {series, labels} shape */
-function adaptWidget(w: Record<string, any>): WidgetSpec {
-  const rows: Record<string, any>[] = w.data ?? [];
-  const xField: string = w.x_field ?? 'x';
-  const chart = buildLineChartModel(rows, xField, w.y_field, w.group_by);
-  const series = chart.series.map(({ key, name }) => ({
-    name,
-    data: chart.data.map((row) => ({ x: row[xField], y: row[key] })),
-  }));
-
-  return {
-    ...w,
-    series,
-    labels: chart.labels,
-    position: w.position ?? { x: 0, y: 0, w: 4, h: 2 },
-  } as unknown as WidgetSpec;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -88,7 +69,9 @@ export default function AnalystStatePanel({ sessionId, refreshKey }: Props) {
             Widgets produced ({state.widgets.length})
           </h4>
           {state.widgets.map((w, i) => (
-            <WidgetRenderer key={w.id ?? i} widget={adaptWidget(w)} />
+            <div key={w.id ?? i} className="h-[260px]">
+              <WidgetRenderer widget={w as WidgetSpec} />
+            </div>
           ))}
         </div>
       )}
