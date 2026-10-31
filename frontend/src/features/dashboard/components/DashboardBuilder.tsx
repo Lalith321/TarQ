@@ -3,11 +3,24 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { ChatPanel } from './ChatPanel';
 import { useDashboardAgent } from '../hooks/useDashboardAgent';
 import WidgetRenderer from './widgets/WidgetRenderer';
+import { switchableTypes } from './widgets/widgetRegistry';
 import type { CanvasPoint, CanvasStroke, WidgetSpec, DashboardSpec } from '@/services/types';
-import { fetchDashboard, updateDashboard, fetchDrillDown } from '@/services/dashboardService';
+import {
+  fetchDashboard,
+  updateDashboard,
+  fetchDrillDown,
+  generateDashboardReportPdf,
+  getDashboardReportUrl,
+} from '@/services/dashboardService';
 import { fetchDataSources } from '@/services/dataSourceService';
 import type { DataSource } from '@/services/dataSourceService';
-import { fetchGeneratedArtifacts } from '@/services/artifactService';
+import {
+  fetchGeneratedArtifacts,
+  deleteGeneratedArtifact,
+  fetchDashboardInputs,
+  uploadDashboardInput,
+  deleteDashboardInput,
+} from '@/services/artifactService';
 import type { GeneratedArtifact } from '@/services/artifactService';
 import { API_BASE_URL } from '@/lib/apiEndpoints';
 import type { SelectedAnalystSource } from '@/services/analystService';
@@ -34,22 +47,37 @@ export function widgetColor(id: string): string {
   return COLORS[h % COLORS.length];
 }
 
-export interface WidgetConfig { title: string; }
+export interface WidgetConfig {
+  title: string;
+  type?: WidgetSpec['type'];
+  color?: string;
+}
 
 /* ── Icons ── */
 const I = {
-  back:    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>,
-  save:    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
-  refresh: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>,
-  agent:   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>,
-  close:   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>,
-  check:   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
-  err:     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
-  spin:    <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>,
-  chat:    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>,
-  upload:  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
-  file:    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
+  back:     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>,
+  save:     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
+  refresh:  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>,
+  download: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+  share:    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>,
+  copy:     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>,
+  mail:     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>,
+  video:    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>,
+  ppt:      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>,
+  agent:    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>,
+  close:    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>,
+  check:    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+  err:      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
+  spin:     <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>,
+  chat:     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>,
+  upload:   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
+  file:     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
 };
+
+function formatFileSize(bytes: number): string {
+  if (bytes > 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
 
 function Toast({ message, type, onClose }: { message: string; type: 'success'|'error'; onClose: () => void }) {
   useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
@@ -64,25 +92,74 @@ function Toast({ message, type, onClose }: { message: string; type: 'success'|'e
 
 function ConfigDrawer({ widget, onClose, onSave }: { widget: WidgetSpec; onClose: () => void; onSave: (c: WidgetConfig) => void }) {
   const [title, setTitle] = useState(widget.title);
+  const [type, setType] = useState<WidgetSpec['type']>(widget.type);
+  const [color, setColor] = useState(widget.color ?? widgetColor(widget.id));
+  const typeOptions = switchableTypes(widget.type);
+
   return (
-    <div className="absolute inset-y-0 left-0 z-40 flex w-64 flex-col shadow-2xl"
+    <div className="absolute inset-y-0 left-0 z-40 flex w-72 flex-col shadow-2xl"
       style={{ background: 'var(--bg-surface)', borderRight: '1px solid var(--border-subtle)' }}>
       <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-        <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Edit Widget</span>
+        <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Customize Widget</span>
         <button onClick={onClose} style={{ color: 'var(--text-muted)' }}>{I.close}</button>
       </div>
-      <div className="flex-1 p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-5">
         <div>
-          <label className="mb-1.5 block text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>Title</label>
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Title</label>
           <input value={title} onChange={e => setTitle(e.target.value)}
             className="w-full rounded-lg px-3 py-2 text-xs outline-none"
             style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-muted)', color: 'var(--text-primary)' }} />
+        </div>
+
+        {typeOptions.length > 1 && (
+          <div>
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Visual Style</label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {typeOptions.map((ct) => {
+                const active = type === ct.id || (type === 'multi_line' && ct.id === 'line') || (type === 'stacked_bar' && ct.id === 'bar');
+                return (
+                  <button
+                    key={ct.id}
+                    type="button"
+                    onClick={() => setType(ct.id)}
+                    className="rounded-lg px-2.5 py-2 text-left text-xs font-medium transition-all"
+                    style={{
+                      background: active ? 'rgba(59,130,246,0.15)' : 'var(--bg-raised)',
+                      border: `1px solid ${active ? '#3b82f6' : 'var(--border-subtle)'}`,
+                      color: active ? '#60a5fa' : 'var(--text-secondary)',
+                    }}
+                  >
+                    {ct.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <label className="mb-2 block text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Accent Color</label>
+          <div className="flex flex-wrap gap-2">
+            {COLORS.map((swatch) => (
+              <button
+                key={swatch}
+                type="button"
+                onClick={() => setColor(swatch)}
+                className="h-6 w-6 rounded-full transition-transform hover:scale-110"
+                style={{
+                  background: swatch,
+                  boxShadow: color === swatch ? `0 0 0 2px var(--bg-surface), 0 0 0 4px ${swatch}` : 'none',
+                }}
+                aria-label={`Select color ${swatch}`}
+              />
+            ))}
+          </div>
         </div>
       </div>
       <div className="flex gap-2 p-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
         <button onClick={onClose} className="flex-1 rounded-lg py-2 text-xs font-medium"
           style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-muted)', color: 'var(--text-secondary)' }}>Cancel</button>
-        <button onClick={() => { onSave({ title }); onClose(); }} className="flex-1 rounded-lg py-2 text-xs font-semibold text-white"
+        <button onClick={() => { onSave({ title, type, color }); onClose(); }} className="flex-1 rounded-lg py-2 text-xs font-semibold text-white"
           style={{ background: 'linear-gradient(135deg,#3b82f6,#06b6d4)' }}>Apply</button>
       </div>
     </div>
@@ -194,6 +271,9 @@ export function DashboardBuilder() {
   const [saving, setSaving]       = useState(false);
   const [autosaveStatus, setAutosaveStatus] = useState<'saved' | 'pending' | 'saving' | 'error'>('saved');
   const [refreshing, setRefreshing] = useState(false);
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [previewOutput, setPreviewOutput] = useState<GeneratedArtifact | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [toast, setToast]         = useState<{ message: string; type: 'success'|'error' } | null>(null);
   const [chatOpen, setChatOpen]   = useState(false);
@@ -204,12 +284,13 @@ export function DashboardBuilder() {
   const [selectedSources, setSelectedSources] = useState<Record<string, string[]>>({});
   const [editingWidget, setEditingWidget] = useState<WidgetSpec | null>(null);
   const [fullscreenWidget, setFullscreenWidget] = useState<string | null>(null);
-  const [ghost, setGhost]         = useState<Ghost | null>(null);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
   const [artifacts, setArtifacts] = useState<{ id: string; name: string; type: string; size: string }[]>([]);
   const [outputs, setOutputs] = useState<GeneratedArtifact[]>([]);
   const [draw, setDraw] = useState<DrawState>({ tool: 'pen', color: '#3b82f6', size: 3, active: false });
   const canvasRef   = useRef<HTMLCanvasElement>(null);
+  const widgetElsRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const ghostElRef   = useRef<HTMLDivElement | null>(null);
+  const ghostBadgeRef = useRef<HTMLSpanElement | null>(null);
   const lastPt      = useRef<CanvasPoint | null>(null);
   const rawStrokePoints = useRef<CanvasPoint[]>([]);
   const activeStroke = useRef<CanvasStroke | null>(null);
@@ -236,7 +317,7 @@ export function DashboardBuilder() {
   const canvasH = canvasRows * RX + 120;
   const canvasW = COLS * CX;
 
-  const sessionId = useMemo(() => `sess_${Date.now()}`, []);
+  const sessionId = useMemo(() => `sess_${dashboardId ?? 'default'}_${Date.now()}`, [dashboardId]);
   const addGeneratedWidgets = useCallback((widgets: WidgetSpec[]) => {
     setDashboard((current) => {
       if (!current) return current;
@@ -248,27 +329,74 @@ export function DashboardBuilder() {
       return newWidgets.length ? { ...current, widgets: [...current.widgets, ...newWidgets] } : current;
     });
   }, []);
-  const selectedAnalystSources: SelectedAnalystSource[] = Object.entries(selectedSources).map(([schema_id, tables]) => ({ schema_id, tables }));
-  const { messages, sending, sendMessage, stopMessage } = useDashboardAgent(sessionId, { dashboardId, onDashboardGenerated: addGeneratedWidgets, selectedSources: selectedAnalystSources, fleetId: selectedFleetId || undefined });
+
+  const refreshDashboardOutputs = useCallback(() => {
+    if (!dashboardId) {
+      setOutputs([]);
+      return;
+    }
+    fetchGeneratedArtifacts(dashboardId)
+      .then((items) => setOutputs(items))
+      .catch(() => undefined);
+  }, [dashboardId]);
+
+  const selectedAnalystSources: SelectedAnalystSource[] = useMemo(
+    () => Object.entries(selectedSources).map(([schema_id, tables]) => ({ schema_id, tables })),
+    [selectedSources]
+  );
+  const agentOpts = useMemo(
+    () => ({
+      dashboardId,
+      onDashboardGenerated: addGeneratedWidgets,
+      onRunComplete: refreshDashboardOutputs,
+      selectedSources: selectedAnalystSources,
+      fleetId: selectedFleetId || undefined,
+    }),
+    [dashboardId, addGeneratedWidgets, refreshDashboardOutputs, selectedAnalystSources, selectedFleetId]
+  );
+  const { messages, sending, sendMessage, stopMessage } = useDashboardAgent(sessionId, agentOpts);
 
   useEffect(() => {
     fetchDataSources().then(setAvailableSources).catch(() => setAvailableSources([]));
   }, []);
 
+  /* Scope Outputs and Inputs strictly to the active dashboardId */
   useEffect(() => {
     let active = true;
-    const loadArtifacts = () => {
-      fetchGeneratedArtifacts().then((items) => {
-        if (active) setOutputs(items);
-      }).catch(() => undefined);
+    setOutputs([]);
+    setArtifacts([]);
+    setPreviewOutput(null);
+    if (!dashboardId) return;
+
+    const loadScopedAssets = () => {
+      fetchGeneratedArtifacts(dashboardId)
+        .then((items) => {
+          if (active) setOutputs(items);
+        })
+        .catch(() => undefined);
     };
-    loadArtifacts();
-    const interval = window.setInterval(loadArtifacts, 5000);
+
+    fetchDashboardInputs(dashboardId)
+      .then((inputs) => {
+        if (!active) return;
+        setArtifacts(
+          inputs.map((inp) => ({
+            id: inp.id,
+            name: inp.name,
+            type: inp.type.toUpperCase(),
+            size: formatFileSize(inp.size),
+          }))
+        );
+      })
+      .catch(() => undefined);
+
+    loadScopedAssets();
+    const interval = window.setInterval(loadScopedAssets, 15_000);
     return () => {
       active = false;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [dashboardId]);
 
   useEffect(() => {
     fetchAgentFleets()
@@ -331,7 +459,8 @@ export function DashboardBuilder() {
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
-  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draw.active]);
 
   /* Redraw vector strokes onto the full artboard after layout or DPR changes. */
   useEffect(() => {
@@ -467,71 +596,185 @@ export function DashboardBuilder() {
     setToast({ message: 'Duplicated', type: 'success' });
   }, []);
 
-  /* ── DRAG: pixel ghost while moving, snap to grid on pointerup ── */
+  /* ── DRAG: 120fps GPU-accelerated translate3d on widget + live snapped grid preview ── */
   const handleDragStart = useCallback((e: React.PointerEvent, widget: WidgetSpec) => {
     e.preventDefault();
     e.stopPropagation();
-    // Capture position at drag start — never read from closure again
-    const { x, y, w, h } = widget.position;
+    const pos = widget.position ?? { x: 0, y: 0, w: 4, h: 3 };
+    const { x, y, w, h } = pos;
     const startPx = gridToPx(x, y, w, h);
     const mx0 = e.clientX;
     const my0 = e.clientY;
 
-    setDraggingId(widget.id);
-    setGhost({ id: widget.id, ...startPx });
+    const widgetEl = widgetElsRef.current.get(widget.id);
+    const ghostEl = ghostElRef.current;
+    const badgeEl = ghostBadgeRef.current;
+
+    if (widgetEl) {
+      widgetEl.classList.add('is-dragging');
+      widgetEl.style.transition = 'box-shadow 180ms ease';
+      widgetEl.style.transform = 'translate3d(0px, 0px, 0) scale(1.012)';
+    }
+
+    if (ghostEl) {
+      ghostEl.style.opacity = '1';
+      ghostEl.style.width = `${startPx.width}px`;
+      ghostEl.style.height = `${startPx.height}px`;
+      ghostEl.style.transform = `translate3d(${startPx.left}px, ${startPx.top}px, 0)`;
+    }
+    if (badgeEl) {
+      badgeEl.textContent = `Col ${x + 1}, Row ${y + 1}`;
+    }
+
+    let snapX = x;
+    let snapY = y;
 
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - mx0;
       const dy = ev.clientY - my0;
-      setGhost({ id: widget.id, left: startPx.left + dx, top: startPx.top + dy, width: startPx.width, height: startPx.height });
+
+      if (widgetEl) {
+        widgetEl.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(1.012)`;
+      }
+
+      const nextX = Math.max(0, Math.min(Math.round((startPx.left + dx) / CX), COLS - w));
+      const nextY = Math.max(0, Math.round((startPx.top + dy) / RX));
+      if (nextX !== snapX || nextY !== snapY) {
+        snapX = nextX;
+        snapY = nextY;
+        const snapPx = gridToPx(snapX, snapY, w, h);
+        if (ghostEl) {
+          ghostEl.style.transform = `translate3d(${snapPx.left}px, ${snapPx.top}px, 0)`;
+        }
+        if (badgeEl) {
+          badgeEl.textContent = `Col ${snapX + 1}, Row ${snapY + 1}`;
+        }
+      }
     };
 
-    const onUp = (ev: PointerEvent) => {
+    const finishDrag = () => {
       window.removeEventListener('pointermove', onMove);
-      const dx = ev.clientX - mx0;
-      const dy = ev.clientY - my0;
-      const newX = Math.max(0, Math.min(Math.round((startPx.left + dx) / CX), COLS - w));
-      const newY = Math.max(0, Math.round((startPx.top  + dy) / RX));
-      updateWidget(widget.id, { position: { x: newX, y: newY, w, h } });
-      setGhost(null);
-      setDraggingId(null);
+      window.removeEventListener('pointerup', finishDrag);
+      window.removeEventListener('pointercancel', finishDrag);
+
+      if (ghostEl) {
+        ghostEl.style.opacity = '0';
+      }
+      if (widgetEl) {
+        widgetEl.classList.remove('is-dragging');
+        widgetEl.style.transition = '';
+        widgetEl.style.transform = '';
+      }
+      updateWidget(widget.id, { position: { x: snapX, y: snapY, w, h } });
     };
 
     window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp, { once: true });
+    window.addEventListener('pointerup', finishDrag, { once: true });
+    window.addEventListener('pointercancel', finishDrag, { once: true });
   }, [updateWidget]);
 
-  /* ── RESIZE: pixel ghost while resizing, snap to grid on pointerup ── */
+  /* ── RESIZE: 120fps live card resize + snapped grid target preview ── */
   const handleResizeStart = useCallback((e: React.PointerEvent, widget: WidgetSpec, edge: string) => {
     e.preventDefault();
     e.stopPropagation();
-    const { x, y, w, h } = widget.position;
+    const pos = widget.position ?? { x: 0, y: 0, w: 4, h: 3 };
+    const { x, y, w, h } = pos;
     const startPx = gridToPx(x, y, w, h);
     const mx0 = e.clientX;
     const my0 = e.clientY;
 
-    setGhost({ id: widget.id, ...startPx });
+    const widgetEl = widgetElsRef.current.get(widget.id);
+    const ghostEl = ghostElRef.current;
+    const badgeEl = ghostBadgeRef.current;
+
+    if (widgetEl) {
+      widgetEl.classList.add('is-resizing');
+      widgetEl.style.transition = 'none';
+    }
+    if (ghostEl) {
+      ghostEl.style.opacity = '1';
+      ghostEl.style.width = `${startPx.width}px`;
+      ghostEl.style.height = `${startPx.height}px`;
+      ghostEl.style.transform = `translate3d(${startPx.left}px, ${startPx.top}px, 0)`;
+    }
+    if (badgeEl) {
+      badgeEl.textContent = `${w} × ${h}`;
+    }
+
+    let snapX = x;
+    let snapY = y;
+    let snapW = w;
+    let snapH = h;
 
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - mx0;
       const dy = ev.clientY - my0;
-      const newW = edge.includes('right')  ? Math.max(CW, startPx.width  + dx) : startPx.width;
-      const newH = edge.includes('bottom') ? Math.max(RH, startPx.height + dy) : startPx.height;
-      setGhost({ id: widget.id, left: startPx.left, top: startPx.top, width: newW, height: newH });
+
+      let liveLeft = startPx.left;
+      let liveTop = startPx.top;
+      let liveWidth = startPx.width;
+      let liveHeight = startPx.height;
+
+      if (edge.includes('right')) {
+        const maxW = (COLS - x) * CX - G;
+        liveWidth = Math.max(CW * 2 + G, Math.min(maxW, startPx.width + dx));
+        snapW = Math.max(2, Math.min(COLS - x, Math.round((liveWidth + G) / CX)));
+      }
+      if (edge.includes('left')) {
+        const maxLeft = startPx.left + startPx.width - (CW * 2 + G);
+        liveLeft = Math.max(0, Math.min(maxLeft, startPx.left + dx));
+        liveWidth = startPx.width + (startPx.left - liveLeft);
+        snapX = Math.max(0, Math.min(x + w - 2, Math.round(liveLeft / CX)));
+        snapW = Math.max(2, (x + w) - snapX);
+      }
+      if (edge.includes('bottom')) {
+        liveHeight = Math.max(RH * 2 + G, startPx.height + dy);
+        snapH = Math.max(2, Math.round((liveHeight + G) / RX));
+      }
+      if (edge.includes('top')) {
+        const maxTop = startPx.top + startPx.height - (RH * 2 + G);
+        liveTop = Math.max(0, Math.min(maxTop, startPx.top + dy));
+        liveHeight = startPx.height + (startPx.top - liveTop);
+        snapY = Math.max(0, Math.min(y + h - 2, Math.round(liveTop / RX)));
+        snapH = Math.max(2, (y + h) - snapY);
+      }
+
+      if (widgetEl) {
+        widgetEl.style.left = `${liveLeft}px`;
+        widgetEl.style.top = `${liveTop}px`;
+        widgetEl.style.width = `${liveWidth}px`;
+        widgetEl.style.height = `${liveHeight}px`;
+      }
+
+      const snapPx = gridToPx(snapX, snapY, snapW, snapH);
+      if (ghostEl) {
+        ghostEl.style.width = `${snapPx.width}px`;
+        ghostEl.style.height = `${snapPx.height}px`;
+        ghostEl.style.transform = `translate3d(${snapPx.left}px, ${snapPx.top}px, 0)`;
+      }
+      if (badgeEl) {
+        badgeEl.textContent = `${snapW} × ${snapH}`;
+      }
     };
 
-    const onUp = (ev: PointerEvent) => {
+    const finishResize = () => {
       window.removeEventListener('pointermove', onMove);
-      const dx = ev.clientX - mx0;
-      const dy = ev.clientY - my0;
-      const newW = edge.includes('right')  ? Math.max(1, Math.min(COLS - x, Math.round((startPx.width  + dx + G) / CX))) : w;
-      const newH = edge.includes('bottom') ? Math.max(1, Math.round((startPx.height + dy + G) / RX)) : h;
-      updateWidget(widget.id, { position: { x, y, w: newW, h: newH } });
-      setGhost(null);
+      window.removeEventListener('pointerup', finishResize);
+      window.removeEventListener('pointercancel', finishResize);
+
+      if (ghostEl) {
+        ghostEl.style.opacity = '0';
+      }
+      if (widgetEl) {
+        widgetEl.classList.remove('is-resizing');
+        widgetEl.style.transition = '';
+      }
+      updateWidget(widget.id, { position: { x: snapX, y: snapY, w: snapW, h: snapH } });
     };
 
     window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp, { once: true });
+    window.addEventListener('pointerup', finishResize, { once: true });
+    window.addEventListener('pointercancel', finishResize, { once: true });
   }, [updateWidget]);
 
   const saveDashboard = async () => {
@@ -556,11 +799,95 @@ export function DashboardBuilder() {
       const refreshed = await fetchDashboard(dashboardId);
       persistedSnapshotRef.current = dashboardSaveSnapshot(refreshed);
       setDashboard(refreshed);
+      refreshDashboardOutputs();
       setRefreshKey(key => key + 1);
       setToast({ message: 'Refreshed', type: 'success' });
     }
     catch (e: any) { setToast({ message: e.message || 'Refresh failed', type: 'error' }); }
     finally { setRefreshing(false); }
+  };
+
+  const getSafeReportFilename = useCallback(() => {
+    const slug = (dashboard?.title || 'dashboard')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'dashboard';
+    return `${slug}_report.pdf`;
+  }, [dashboard?.title]);
+
+  const handleDownloadReport = async () => {
+    if (!dashboard) return;
+    setGeneratingReport(true);
+    try {
+      const blob = await generateDashboardReportPdf(dashboard.id, dashboard);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = getSafeReportFilename();
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      setToast({ message: 'PDF report downloaded', type: 'success' });
+    } catch (e: any) {
+      setToast({ message: e.message || 'Failed to generate PDF report', type: 'error' });
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
+  const handleNativeShareReport = async () => {
+    if (!dashboard) return;
+    setGeneratingReport(true);
+    try {
+      const blob = await generateDashboardReportPdf(dashboard.id, dashboard);
+      const filename = getSafeReportFilename();
+      const file = new File([blob], filename, { type: 'application/pdf' });
+      const nav = navigator as Navigator & { canShare?: (data?: ShareData) => boolean };
+
+      if (typeof nav.share === 'function' && (!nav.canShare || nav.canShare({ files: [file] }))) {
+        await nav.share({
+          title: `${dashboard.title || 'Dashboard'} — Executive PDF Report`,
+          text: `Executive PDF report for "${dashboard.title || 'Untitled Dashboard'}"`,
+          files: [file],
+        });
+        setToast({ message: 'Report shared', type: 'success' });
+        return;
+      }
+
+      // Fallback when browser does not support file sharing via navigator.share:
+      // download the PDF report and copy the direct report link to clipboard.
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+
+      const reportUrl = getDashboardReportUrl(dashboard.id, false);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(reportUrl);
+      }
+      setToast({ message: 'PDF report downloaded & link copied', type: 'success' });
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') {
+        setToast({ message: e.message || 'Share failed', type: 'error' });
+      }
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
+  const handleCopyText = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setToast({ message: `${label} copied to clipboard`, type: 'success' });
+    } catch {
+      setToast({ message: `Could not copy ${label}`, type: 'error' });
+    }
   };
 
   const handleDrillDown = async (widget: WidgetSpec, row: Record<string, any>) => {
@@ -572,14 +899,61 @@ export function DashboardBuilder() {
     } catch (e: any) { setToast({ message: `Drill-down failed: ${e.message}`, type: 'error' }); }
   };
 
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
-    setArtifacts(prev => [...prev, ...files.map(f => ({
-      id: `a${Date.now()}${Math.random().toString(36).slice(2)}`,
-      name: f.name, type: f.type.split('/')[1]?.toUpperCase() ?? 'FILE',
-      size: f.size > 1048576 ? `${(f.size/1048576).toFixed(1)} MB` : `${(f.size/1024).toFixed(0)} KB`,
-    }))]);
     e.target.value = '';
+    if (!files.length) return;
+
+    if (!dashboardId) {
+      setArtifacts(prev => [...prev, ...files.map(f => ({
+        id: `a${Date.now()}${Math.random().toString(36).slice(2)}`,
+        name: f.name,
+        type: f.type.split('/')[1]?.toUpperCase() ?? 'FILE',
+        size: formatFileSize(f.size),
+      }))]);
+      return;
+    }
+
+    for (const file of files) {
+      try {
+        const uploaded = await uploadDashboardInput(dashboardId, file);
+        setArtifacts(prev => [
+          ...prev.filter(item => item.id !== uploaded.id),
+          {
+            id: uploaded.id,
+            name: uploaded.name,
+            type: uploaded.type.toUpperCase(),
+            size: formatFileSize(uploaded.size),
+          },
+        ]);
+      } catch (err: any) {
+        setToast({ message: err.message || `Failed to upload ${file.name}`, type: 'error' });
+      }
+    }
+    setToast({ message: `Uploaded ${files.length} file${files.length > 1 ? 's' : ''} to this dashboard`, type: 'success' });
+  };
+
+  const handleRemoveInput = async (inputId: string) => {
+    setArtifacts(prev => prev.filter(x => x.id !== inputId));
+    if (dashboardId) {
+      try {
+        await deleteDashboardInput(inputId, dashboardId);
+      } catch {
+        // Ignore if already removed
+      }
+    }
+  };
+
+  const handleRemoveOutput = async (artifactId: string) => {
+    setOutputs(prev => prev.filter(x => x.id !== artifactId));
+    if (previewOutput?.id === artifactId) setPreviewOutput(null);
+    try {
+      await deleteGeneratedArtifact(artifactId, dashboardId);
+      setToast({ message: 'Output removed', type: 'success' });
+    } catch (err: any) {
+      setToast({ message: err.message || 'Could not remove output', type: 'error' });
+      refreshDashboardOutputs();
+    }
   };
 
   /* ── Loading ── */
@@ -611,8 +985,24 @@ export function DashboardBuilder() {
           {isNew && <span className="db-badge-new">New</span>}
         </div>
         <div className="flex items-center gap-2">
-          <button className="db-btn-ghost" onClick={handleRefresh} disabled={refreshing}>
+          <button className="db-btn-ghost" onClick={handleRefresh} disabled={refreshing} title="Refresh dashboard data and outputs">
             {refreshing ? I.spin : I.refresh}<span>Refresh</span>
+          </button>
+          <button
+            className="db-btn-ghost"
+            onClick={handleDownloadReport}
+            disabled={generatingReport}
+            title="Download PDF report for this dashboard"
+          >
+            {generatingReport ? I.spin : I.download}<span>Download</span>
+          </button>
+          <button
+            className="db-btn-ghost"
+            onClick={() => setShareModalOpen(true)}
+            disabled={generatingReport}
+            title="Generate PDF report and share this dashboard"
+          >
+            {I.share}<span>Share</span>
           </button>
           <span className="db-autosave-status" data-state={autosaveStatus} role="status">
             {autosaveStatus === 'saving' ? 'Autosaving…' : autosaveStatus === 'pending' ? 'Unsaved changes' : autosaveStatus === 'error' ? 'Autosave failed' : 'All changes saved'}
@@ -629,11 +1019,11 @@ export function DashboardBuilder() {
         {/* ── Left panel ── */}
         <aside className="db-sidebar">
           <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUpload}
-            accept=".pdf,.pptx,.docx,.csv,.png,.jpg,.jpeg,.txt" />
+            accept=".pdf,.pptx,.docx,.csv,.json,.png,.jpg,.jpeg,.txt" />
           <div className="db-sidebar-section">
             <div className="db-sidebar-label">
               <span>Inputs</span>
-              <button className="db-sidebar-add" onClick={() => fileInputRef.current?.click()}>{I.upload}</button>
+              <button className="db-sidebar-add" onClick={() => fileInputRef.current?.click()} title="Upload input file to this dashboard">{I.upload}</button>
             </div>
             {artifacts.length === 0 ? (
               <button className="db-upload-empty" onClick={() => fileInputRef.current?.click()}>
@@ -645,34 +1035,82 @@ export function DashboardBuilder() {
                   <div key={a.id} className="db-artifact">
                     <span style={{ color: '#3b82f6' }}>{I.file}</span>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>{a.name}</p>
+                      <p className="truncate text-[11px] font-medium" style={{ color: 'var(--text-primary)' }} title={a.name}>{a.name}</p>
                       <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{a.type} · {a.size}</p>
                     </div>
-                    <button onClick={() => setArtifacts(p => p.filter(x => x.id !== a.id))} style={{ color: 'var(--text-muted)' }}>{I.close}</button>
+                    <button onClick={() => handleRemoveInput(a.id)} style={{ color: 'var(--text-muted)' }} title="Remove input">{I.close}</button>
                   </div>
                 ))}
               </div>
             )}
           </div>
           <div className="db-sidebar-section">
-            <div className="db-sidebar-label"><span>Outputs</span></div>
+            <div className="db-sidebar-label">
+              <span>Outputs ({outputs.length})</span>
+              <button className="db-sidebar-add" onClick={refreshDashboardOutputs} title="Refresh outputs">{I.refresh}</button>
+            </div>
             {outputs.length === 0 ? (
               <div className="db-upload-empty" style={{ cursor: 'default' }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-                <span>AI outputs appear here</span>
+                <span>AI outputs for this dashboard</span>
               </div>
             ) : (
               <div className="space-y-1">
-                {outputs.map(o => (
-                  <div key={o.id} className="db-artifact">
-                    <span style={{ color: '#10b981' }}>{I.file}</span>
-                    <div className="min-w-0 flex-1">
-                      <a href={`${API_BASE_URL}${o.url}`} download={o.name}
-                        className="block truncate text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>{o.name}</a>
-                      <p className="text-[10px]" style={{ color: '#10b981' }}>Ready · {(o.size / 1048576).toFixed(1)} MB</p>
+                {outputs.map(o => {
+                  const isVideo = o.type === 'video';
+                  const isPpt = o.type === 'ppt';
+                  const isImage = o.type === 'image';
+                  const badgeColor = isVideo ? '#8b5cf6' : isPpt ? '#f59e0b' : '#10b981';
+                  return (
+                    <div key={o.id} className="db-artifact">
+                      <span style={{ color: badgeColor }}>
+                        {isVideo ? I.video : isPpt ? I.ppt : I.file}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        {(isVideo || isImage) ? (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewOutput(o)}
+                            className="block w-full text-left truncate text-[11px] font-medium hover:underline"
+                            style={{ color: 'var(--text-primary)' }}
+                            title={`Preview ${o.name}`}
+                          >
+                            {o.name}
+                          </button>
+                        ) : (
+                          <a
+                            href={`${API_BASE_URL}${o.url}`}
+                            download={o.name}
+                            className="block truncate text-[11px] font-medium hover:underline"
+                            style={{ color: 'var(--text-primary)' }}
+                            title={`Download ${o.name}`}
+                          >
+                            {o.name}
+                          </a>
+                        )}
+                        <p className="text-[10px]" style={{ color: badgeColor }}>
+                          {o.type.toUpperCase()} · {formatFileSize(o.size)}
+                        </p>
+                      </div>
+                      <a
+                        href={`${API_BASE_URL}${o.url}`}
+                        download={o.name}
+                        style={{ color: 'var(--text-secondary)' }}
+                        title={`Download ${o.name}`}
+                      >
+                        {I.download}
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveOutput(o.id)}
+                        style={{ color: 'var(--text-muted)' }}
+                        title="Remove output"
+                      >
+                        {I.close}
+                      </button>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -681,7 +1119,7 @@ export function DashboardBuilder() {
         {/* ── Config drawer ── */}
         {editingWidget && (
           <ConfigDrawer widget={editingWidget} onClose={() => setEditingWidget(null)}
-            onSave={cfg => { updateWidget(editingWidget.id, { title: cfg.title }); setToast({ message: 'Updated', type: 'success' }); }} />
+            onSave={cfg => { updateWidget(editingWidget.id, { title: cfg.title, type: cfg.type, color: cfg.color }); setToast({ message: 'Widget updated', type: 'success' }); }} />
         )}
 
         {/* ── Fullscreen ── */}
@@ -719,19 +1157,25 @@ export function DashboardBuilder() {
               onPointerCancel={onDrawUp}
             />
 
-            {/* drag/resize ghost */}
-            {ghost && (
-              <div className="db-ghost" style={{ left: ghost.left, top: ghost.top, width: ghost.width, height: ghost.height }} />
-            )}
+            {/* persistent drag/resize target snap ghost (updated via direct DOM ref for 120fps) */}
+            <div ref={ghostElRef} className="db-ghost" style={{ display: 'none' }}>
+              <span ref={ghostBadgeRef} className="db-ghost-badge" />
+            </div>
 
             {/* widgets */}
             {dashboard.widgets.map(widget => {
               const pos = widget.position ?? { x: 0, y: 0, w: 4, h: 3 };
               const { left, top, width, height } = gridToPx(pos.x, pos.y, pos.w, pos.h);
-              const isDragging = draggingId === widget.id;
               return (
-                <div key={widget.id} className={`db-widget${isDragging ? ' dragging' : ''}`}
-                  style={{ left, top, width, height }}>
+                <div
+                  key={widget.id}
+                  ref={el => {
+                    if (el) widgetElsRef.current.set(widget.id, el);
+                    else widgetElsRef.current.delete(widget.id);
+                  }}
+                  className="db-widget"
+                  style={{ left, top, width, height }}
+                >
                   <WidgetRenderer
                     widget={widget}
                     onDrillDown={widget.drill_down?.enabled ? handleDrillDown : undefined}
@@ -745,10 +1189,19 @@ export function DashboardBuilder() {
                       onDragStart:  (e) => handleDragStart(e, widget),
                     }}
                   />
-                  {/* resize handles */}
+                  {/* 8-way resize handles + visual corner grip */}
                   <div className="db-resize db-resize-r"  onPointerDown={e => handleResizeStart(e, widget, 'right')} />
+                  <div className="db-resize db-resize-l"  onPointerDown={e => handleResizeStart(e, widget, 'left')} />
                   <div className="db-resize db-resize-b"  onPointerDown={e => handleResizeStart(e, widget, 'bottom')} />
-                  <div className="db-resize db-resize-br" onPointerDown={e => handleResizeStart(e, widget, 'right bottom')} />
+                  <div className="db-resize db-resize-t"  onPointerDown={e => handleResizeStart(e, widget, 'top')} />
+                  <div className="db-resize db-resize-br" onPointerDown={e => handleResizeStart(e, widget, 'right bottom')}>
+                    <svg className="db-resize-grip" width="10" height="10" viewBox="0 0 10 10" fill="none">
+                      <path d="M8.5 1.5L1.5 8.5M8.5 5L5 8.5M8.5 8.5L8.5 8.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                  </div>
+                  <div className="db-resize db-resize-bl" onPointerDown={e => handleResizeStart(e, widget, 'left bottom')} />
+                  <div className="db-resize db-resize-tr" onPointerDown={e => handleResizeStart(e, widget, 'right top')} />
+                  <div className="db-resize db-resize-tl" onPointerDown={e => handleResizeStart(e, widget, 'left top')} />
                 </div>
               );
             })}
@@ -886,6 +1339,185 @@ export function DashboardBuilder() {
           </button>
         </div>
 
+        {/* ── Output Preview Modal (Video / Image) ── */}
+        {previewOutput && (
+          <div className="db-fullscreen-overlay" onClick={() => setPreviewOutput(null)}>
+            <div
+              className="relative w-full max-w-3xl rounded-2xl p-5 shadow-2xl"
+              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{previewOutput.name}</h3>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {previewOutput.type.toUpperCase()} · {formatFileSize(previewOutput.size)} · Scoped to {dashboard.title || dashboard.id}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`${API_BASE_URL}${previewOutput.url}`}
+                    download={previewOutput.name}
+                    className="db-btn-ghost"
+                  >
+                    {I.download}<span>Download</span>
+                  </a>
+                  <button className="db-icon-btn" onClick={() => setPreviewOutput(null)}>{I.close}</button>
+                </div>
+              </div>
+              <div className="flex items-center justify-center overflow-hidden rounded-xl bg-black/60 p-2">
+                {previewOutput.type === 'video' ? (
+                  <video
+                    src={`${API_BASE_URL}${previewOutput.url}`}
+                    controls
+                    autoPlay
+                    className="max-h-[68vh] w-full rounded-lg"
+                  />
+                ) : (
+                  <img
+                    src={`${API_BASE_URL}${previewOutput.url}`}
+                    alt={previewOutput.name}
+                    className="max-h-[68vh] max-w-full rounded-lg object-contain"
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Share & PDF Report Modal ── */}
+        {shareModalOpen && (
+          <div className="db-fullscreen-overlay" onClick={() => setShareModalOpen(false)}>
+            <div
+              className="relative w-full max-w-lg rounded-2xl p-6 shadow-2xl"
+              style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    Share Dashboard & Executive PDF Report
+                  </h3>
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Generate a formatted multi-page PDF report with KPIs, statistical summaries, vector charts, data tables, and attached outputs for "{dashboard.title || 'Untitled Dashboard'}".
+                  </p>
+                </div>
+                <button className="db-icon-btn" onClick={() => setShareModalOpen(false)} aria-label="Close share modal">
+                  {I.close}
+                </button>
+              </div>
+
+              {/* Report Summary Cards */}
+              <div className="mb-4 grid grid-cols-3 gap-2">
+                <div className="rounded-xl p-3" style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-subtle)' }}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Widgets</p>
+                  <p className="mt-1 text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{dashboard.widgets.length}</p>
+                </div>
+                <div className="rounded-xl p-3" style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-subtle)' }}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Charts & KPIs</p>
+                  <p className="mt-1 text-lg font-bold" style={{ color: '#3b82f6' }}>
+                    {dashboard.widgets.filter(w => w.type !== 'table').length}
+                  </p>
+                </div>
+                <div className="rounded-xl p-3" style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-subtle)' }}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Outputs</p>
+                  <p className="mt-1 text-lg font-bold" style={{ color: '#10b981' }}>{outputs.length}</p>
+                </div>
+              </div>
+
+              {/* Primary PDF Report Actions */}
+              <div className="mb-5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleNativeShareReport}
+                  disabled={generatingReport}
+                  className="db-btn-primary flex-1 justify-center py-2.5"
+                >
+                  {generatingReport ? I.spin : I.share}
+                  <span>{generatingReport ? 'Generating PDF Report…' : 'Generate & Share PDF Report'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadReport}
+                  disabled={generatingReport}
+                  className="db-btn-ghost justify-center px-4"
+                >
+                  {generatingReport ? I.spin : I.download}
+                  <span>Download PDF</span>
+                </button>
+              </div>
+
+              {/* Direct Links */}
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+                    Direct PDF Report Link
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      readOnly
+                      value={getDashboardReportUrl(dashboard.id, false)}
+                      className="flex-1 rounded-lg px-3 py-2 text-xs outline-none"
+                      style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}
+                    />
+                    <button
+                      type="button"
+                      className="db-btn-ghost"
+                      onClick={() => handleCopyText(getDashboardReportUrl(dashboard.id, false), 'PDF report link')}
+                    >
+                      {I.copy}<span>Copy</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+                    Interactive Dashboard Link
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      readOnly
+                      value={typeof window !== 'undefined' ? window.location.href : ''}
+                      className="flex-1 rounded-lg px-3 py-2 text-xs outline-none"
+                      style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}
+                    />
+                    <button
+                      type="button"
+                      className="db-btn-ghost"
+                      onClick={() => handleCopyText(window.location.href, 'Dashboard link')}
+                    >
+                      {I.copy}<span>Copy</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick Email Share Footer */}
+              <div className="mt-5 flex items-center justify-between pt-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <a
+                  href={`mailto:?subject=${encodeURIComponent(`${dashboard.title || 'Dashboard'} — Executive Report`)}&body=${encodeURIComponent(
+                    `Here is the executive report for "${dashboard.title || 'Untitled Dashboard'}":\n\n` +
+                    `• PDF Report: ${getDashboardReportUrl(dashboard.id, false)}\n` +
+                    `• Interactive Dashboard: ${typeof window !== 'undefined' ? window.location.href : ''}\n`
+                  )}`}
+                  className="db-btn-ghost"
+                >
+                  {I.mail}<span>Share via Email</span>
+                </a>
+                <a
+                  href={getDashboardReportUrl(dashboard.id, false)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-medium hover:underline"
+                  style={{ color: '#3b82f6' }}
+                >
+                  Open PDF in new tab →
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       </div>
 
@@ -925,17 +1557,29 @@ export function DashboardBuilder() {
         .db-canvas-inner { position:relative; margin:24px; }
         .db-dot-grid { position:absolute; inset:0; pointer-events:none; }
         .db-doodle-canvas { position:absolute; inset:0; width:100%; height:100%; touch-action:none; z-index:1; }
-        .db-ghost { position:absolute; border:2px dashed rgba(59,130,246,0.55); background:rgba(59,130,246,0.07); border-radius:8px; pointer-events:none; z-index:200; transition: none; }
+        .db-ghost { position:absolute; border:2px dashed rgba(59,130,246,0.65); background:linear-gradient(135deg, rgba(59,130,246,0.12) 0%, rgba(168,85,247,0.06) 100%); border-radius:14px; pointer-events:none; z-index:4; transition:left 110ms cubic-bezier(0.22, 1, 0.36, 1), top 110ms cubic-bezier(0.22, 1, 0.36, 1), width 110ms cubic-bezier(0.22, 1, 0.36, 1), height 110ms cubic-bezier(0.22, 1, 0.36, 1); box-shadow:inset 0 0 0 1px rgba(59,130,246,0.15); }
+        .db-ghost-badge { position:absolute; right:10px; bottom:8px; padding:2px 8px; border-radius:999px; background:rgba(15,23,42,0.85); border:1px solid rgba(59,130,246,0.45); color:#60a5fa; font-size:10px; font-weight:700; font-family:var(--font-mono); letter-spacing:.03em; backdrop-filter:blur(6px); }
         /* widget tile on canvas */
-        .db-widget { position:absolute; z-index:2; }
-        .db-widget.dragging { opacity:.4; pointer-events:none; }
+        .db-widget { position:absolute; z-index:2; transition:left 220ms cubic-bezier(0.22, 1, 0.36, 1), top 220ms cubic-bezier(0.22, 1, 0.36, 1), width 220ms cubic-bezier(0.22, 1, 0.36, 1), height 220ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 180ms ease; }
+        .db-widget.is-dragging { z-index:100; transition:none !important; pointer-events:none; filter:drop-shadow(0 22px 44px rgba(0,0,0,0.55)); }
+        .db-widget.is-dragging .widget-tile { border-color:rgba(59,130,246,0.65); box-shadow:0 0 0 1px rgba(59,130,246,0.35); }
+        .db-widget.is-resizing { z-index:100; transition:none !important; pointer-events:none; filter:drop-shadow(0 18px 36px rgba(0,0,0,0.45)); }
+        .db-widget.is-resizing .widget-tile { border-color:rgba(59,130,246,0.65); }
 
-        /* resize handles */
-        .db-resize { position:absolute; z-index:30; background:transparent; }
-        .db-resize:hover { background:rgba(59,130,246,0.3); border-radius:3px; }
-        .db-resize-r  { right:-5px; top:16px; bottom:16px; width:10px; cursor:ew-resize; }
-        .db-resize-b  { bottom:-5px; left:16px; right:16px; height:10px; cursor:ns-resize; }
-        .db-resize-br { right:-5px; bottom:-5px; width:14px; height:14px; cursor:nwse-resize; border-radius:3px; }
+        /* 8-way resize handles */
+        .db-resize { position:absolute; z-index:30; background:transparent; transition:background .15s ease; }
+        .db-resize:hover { background:rgba(59,130,246,0.32); border-radius:4px; }
+        .db-resize-r  { right:-5px; top:14px; bottom:14px; width:10px; cursor:ew-resize; }
+        .db-resize-l  { left:-5px; top:14px; bottom:14px; width:10px; cursor:ew-resize; }
+        .db-resize-b  { bottom:-5px; left:14px; right:14px; height:10px; cursor:ns-resize; }
+        .db-resize-t  { top:-5px; left:14px; right:14px; height:10px; cursor:ns-resize; }
+        .db-resize-br { right:0; bottom:0; width:18px; height:18px; cursor:nwse-resize; border-bottom-right-radius:14px; display:flex; align-items:flex-end; justify-content:flex-end; padding:4px; color:var(--text-muted); opacity:0; transition:opacity .15s ease, color .15s ease, background .15s ease; }
+        .db-widget:hover .db-resize-br { opacity:0.65; }
+        .db-resize-br:hover { opacity:1 !important; color:#3b82f6; background:rgba(59,130,246,0.18); }
+        .db-resize-grip { pointer-events:none; }
+        .db-resize-bl { left:-5px; bottom:-5px; width:14px; height:14px; cursor:nesw-resize; border-radius:4px; }
+        .db-resize-tr { right:-5px; top:-5px; width:14px; height:14px; cursor:nesw-resize; border-radius:4px; }
+        .db-resize-tl { left:-5px; top:-5px; width:14px; height:14px; cursor:nwse-resize; border-radius:4px; }
 
         /* bottom toolbar */
         .db-bottom-bar { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); z-index:40; display:flex; align-items:center; gap:2px; padding:5px 8px; border-radius:14px; background:var(--bg-surface); border:1px solid var(--border-subtle); box-shadow:0 8px 32px rgba(0,0,0,0.4); backdrop-filter:blur(12px); }
