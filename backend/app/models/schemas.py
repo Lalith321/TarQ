@@ -16,13 +16,19 @@ from pydantic import BaseModel, Field
 
 class WidgetType(str, Enum):
     BAR = "bar"
+    STACKED_BAR = "stacked_bar"
     LINE = "line"
     MULTI_LINE = "multi_line"
     PIE = "pie"
     AREA = "area"
     TABLE = "table"
     STAT = "stat"
-    GIS = "gis"  # new
+    GIS = "gis"
+    SCATTER = "scatter"
+    MANHATTAN = "manhattan"
+    VOLCANO = "volcano"
+    HEATMAP = "heatmap"
+    TILED_STRUCTURE = "tiled_structure"
 
 
 class GisGeometry(str, Enum):
@@ -30,15 +36,19 @@ class GisGeometry(str, Enum):
     POINT = "point"          # one marker per row
     HEATMAP = "heatmap"      # density surface over point weight
     CHOROPLETH = "choropleth"  # shaded regions, needs boundary_geojson_url
+    POLYGON = "polygon"      # inline GeoJSON / polygon geometry per row
+    TRAJECTORY = "trajectory"  # connected path / migration / lineage route
 
 
 class GisConfig(BaseModel):
-    lat_field: str
-    lng_field: str
+    lat_field: str = "lat"
+    lng_field: str = "lng"
     geometry: GisGeometry = GisGeometry.POINT
     weight_field: Optional[str] = None       # for heatmap intensity
     region_id_field: Optional[str] = None    # for choropleth join key
     boundary_geojson_url: Optional[str] = None  # static asset, not fetched live
+    geojson_data: Optional[dict[str, Any]] = None
+    tile_url: Optional[str] = None
     tooltip_fields: list[str] = Field(default_factory=list)
 
 
@@ -80,7 +90,7 @@ class WidgetSpec(BaseModel):
     y_field: Optional[str | list[str]] = None
     group_by: Optional[str] = None
     color: Optional[str] = None
-    gis: Optional[GisConfig] = None                 # required when type == GIS
+    gis: Optional[GisConfig] = None                 # used when type == GIS
     drill_down: Optional[DrillDownConfig] = None
     sql_connection: Optional[str] = None
     sql_query: Optional[str] = None

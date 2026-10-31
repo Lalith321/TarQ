@@ -17,22 +17,28 @@ def dashboard_tool(
         (
             "List of widgets to render. Each widget is an object with:\n"
             "- id: str (unique within the dashboard)\n"
-            "- type: one of 'bar', 'stacked_bar', 'line', 'multi_line', 'pie', 'area', 'table', 'stat', 'gis'\n"
+            "- type: one of 'bar', 'stacked_bar', 'line', 'multi_line', 'pie', 'area', 'table', 'stat', 'gis', 'scatter', 'manhattan', 'volcano', 'heatmap', 'tiled_structure'\n"
             "- title: str (widget heading)\n"
             "- data: optional list[dict] (row preview; live SQL-backed dashboards fetch current rows)\n"
             "- x_field: str (key in each data row for x-axis/category; omit for 'gis')\n"
             "- y_field: str | list[str] (key(s) in each data row for y-axis/values; omit for 'gis')\n"
-            "- group_by: optional str (key used to split data into multiple series)\n"
-            "  For multi_line, use long-form rows: x_field is the category/date, group_by is the series label (for example company), and y_field is the numeric measure.\n"
+            "- group_by: optional str (key used to split data into multiple series or groups)\n"
+            "  * For 'multi_line': x_field is category/date, group_by is series label, y_field is numeric measure.\n"
+            "  * For 'scatter' (PCA / t-SNE / XY correlation): x_field is X coordinate (e.g. pc1), y_field is Y coordinate (e.g. pc2), group_by is optional cluster/population label. Supports real-time spatial tiling switch.\n"
+            "  * For 'tiled_structure' (Spatial Quadtree & LoD Virtual Canvas): x_field is X coordinate (umap_1, lon, x), y_field is Y coordinate (umap_2, lat, y), group_by is cluster/element/type. Modes auto-detected from title or data ('clusters', 'graph', 'map', 'molecular' with CPK coloring and valence bonds).\n"
+            "  * For 'manhattan' (GWAS): x_field is genomic position (or chromosome), y_field is p-value (or -log10 p), group_by is chromosome.\n"
+            "  * For 'volcano' (differential expression): x_field is log2 fold-change, y_field is p-value/padj (or -log10 p), group_by is gene/feature symbol.\n"
+            "  * For 'heatmap' (expression / LD matrix): either long-form (x_field=column, group_by=row, y_field=value) or wide-form (x_field=row label, y_field=list of numeric column keys).\n"
             "- color: optional str (hex code or theme token for primary series)\n\n"
             "GIS Configuration (REQUIRED when type is 'gis'):\n"
             "  Object containing:\n"
             "  - lat_field: str (key holding latitude in data)\n"
             "  - lng_field: str (key holding longitude in data)\n"
-            "  - geometry: 'point' | 'heatmap' | 'choropleth' (default 'point')\n"
+            "  - geometry: 'point' | 'heatmap' | 'choropleth' | 'polygon' | 'trajectory' (default 'point')\n"
             "      * 'point': plots one marker per row\n"
             "      * 'heatmap': scales marker size/opacity by weight_field as a density approximation\n"
-            "      * 'choropleth': shades named regions; requires boundary_geojson_url\n"
+            "      * 'choropleth' / 'polygon': shades regions; uses boundary_geojson_url or geojson_data\n"
+            "      * 'trajectory': connects ordered points with a path line (e.g. migration/lineage route)\n"
             "  - weight_field: optional str (numeric key used to size/color heatmap markers)\n"
             "  - region_id_field: optional str (key used to join rows to boundary_geojson_url features)\n"
             "  - boundary_geojson_url: optional str (URL to static GeoJSON of region boundaries; required for 'choropleth')\n"
@@ -90,13 +96,27 @@ def dashboard_tool(
     dashboard_id = uuid.uuid4().hex
     artifact_path = os.path.join(_scratch_dir, f"dashboard_{dashboard_id}.json")
 
+    from ..models.schemas import WidgetSpec
+
+    validated_widgets: list[dict[str, Any]] = []
+    for index, raw_widget in enumerate(widgets):
+        normalised = dict(raw_widget)
+        normalised.setdefault("id", f"widget_{uuid.uuid4().hex[:8]}")
+        normalised.setdefault(
+            "position",
+            {"x": (index % 2) * 6, "y": (index // 2) * 4, "w": 6, "h": 4},
+        )
+        validated_widgets.append(
+            WidgetSpec.model_validate(normalised).model_dump(mode="json")
+        )
+
     payload = {
         "id": dashboard_id,
         "title": title,
         "description": description,
         "is_standalone_widget": is_standalone_widget,
-        "widget_count": len(widgets),
-        "widgets": widgets,
+        "widget_count": len(validated_widgets),
+        "widgets": validated_widgets,
     }
 
     # Save to scratch path as persistent artifact
@@ -108,6 +128,6 @@ def dashboard_tool(
     if is_standalone_widget:
         summary_msg = f"Widget '{title}' rendered successfully."
     else:
-        summary_msg = f"Dashboard '{title}' ready with {len(widgets)} widget(s). id={dashboard_id}"
+        summary_msg = f"Dashboard '{title}' ready with {len(validated_widgets)} widget(s). id={dashboard_id}"
 
     return summary_msg, payload
